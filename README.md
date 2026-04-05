@@ -94,14 +94,16 @@ Screen Agent is designed with **user-first** safety:
 
 **User always has priority.** The moment you touch your keyboard or mouse, the agent pauses instantly. It only resumes after you've been idle for 1.5 seconds (configurable). The agent never fights you for control.
 
-**Scope locking.** Before interacting, the agent must declare which window or region it's operating on. Any action outside the scope is rejected.
+**App allowlist.** The agent must declare which apps it needs access to. It can only interact with apps on the list. Need to work across Chrome and Figma? Just add both.
 
 ```
-Claude: [calls set_scope with window_title="Chrome"]
-        I've locked my scope to Chrome. I'll only interact within that window.
+Claude: [calls add_app("Chrome")]
+        [calls add_app("Figma")]
+        I can now operate in Chrome and Figma.
 
-        [calls click at (400, 300)]  ← allowed, Chrome is focused
-        [calls click at (100, 50)]   ← rejected if that's outside Chrome
+        [clicks in Chrome]      ← allowed
+        [clicks in Figma]       ← allowed
+        [clicks in Slack]       ← rejected, not on the list
 
 User:   *moves mouse*
 Claude: [paused — waiting for user to finish]
@@ -111,9 +113,11 @@ Claude: [resumes after 1.5s idle] Continuing where I left off.
 
 | Safety Tool | Description |
 |---|---|
-| `set_scope` | Lock agent to a specific window or region |
-| `clear_scope` | Remove scope restrictions |
-| `get_agent_status` | Check guardian state, user activity, current scope |
+| `add_app` | Add an app to the allowed list (e.g. "Chrome", "Figma") |
+| `remove_app` | Remove an app from the allowed list |
+| `set_region` | Restrict to a pixel region on screen |
+| `clear_scope` | Remove all restrictions |
+| `get_agent_status` | Check guardian state, user activity, allowed apps |
 
 ## Platform Support
 

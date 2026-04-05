@@ -215,44 +215,60 @@ TOOLS: list[Tool] = [
     ),
     # ── Safety / Guardian Tools ──────────────────────────────────────
     Tool(
-        name="set_scope",
+        name="add_app",
         description=(
-            "Restrict agent to only operate within a specific window or screen region. "
-            "Any action outside the scope will be rejected. "
-            "ALWAYS call this before performing a series of interactions."
+            "Add an app to the allowed list. The agent can ONLY interact with apps "
+            "in this list. Use partial names (e.g. 'Chrome', 'Figma', 'Terminal'). "
+            "Call this before performing any interactions."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "window_title": {
+                "app_name": {
                     "type": "string",
-                    "description": "Restrict to a window matching this title (partial match)",
+                    "description": "App name to allow (partial match, case-insensitive)",
                 },
-                "region": {
-                    "type": "object",
-                    "description": "Restrict to a screen region",
-                    "properties": {
-                        "x": {"type": "integer"},
-                        "y": {"type": "integer"},
-                        "width": {"type": "integer"},
-                        "height": {"type": "integer"},
-                    },
-                    "required": ["x", "y", "width", "height"],
+            },
+            "required": ["app_name"],
+        },
+    ),
+    Tool(
+        name="remove_app",
+        description="Remove an app from the allowed list.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "app_name": {
+                    "type": "string",
+                    "description": "App name to remove",
                 },
+            },
+            "required": ["app_name"],
+        },
+    ),
+    Tool(
+        name="set_region",
+        description="Restrict agent to a pixel region on screen. Pass no arguments to clear.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer"},
+                "y": {"type": "integer"},
+                "width": {"type": "integer"},
+                "height": {"type": "integer"},
             },
         },
     ),
     Tool(
         name="clear_scope",
-        description="Remove scope restrictions so agent can operate anywhere.",
+        description="Remove ALL scope restrictions (allowed apps + region). Agent can operate anywhere.",
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="get_agent_status",
         description=(
             "Check current agent status: whether user is active, "
-            "current scope restrictions, and guardian state. "
-            "Call this before starting interactions to understand the current state."
+            "which apps are allowed, current region restriction, and guardian state."
         ),
         inputSchema={"type": "object", "properties": {}},
     ),
@@ -297,17 +313,28 @@ async def _dispatch(
             return [TextContent(type="text", text=json.dumps(result))]
 
         # ── Guardian management tools ────────────────────────────
-        case "set_scope":
-            scope = guardian.set_scope(
-                window_title=args.get("window_title"),
-                region=args.get("region"),
-            )
+        case "add_app":
+            scope = guardian.add_app(args["app_name"])
             return [TextContent(type="text", text=json.dumps({
                 "success": True,
-                "scope": {
-                    "window": scope.window_title,
-                    "region": scope.region,
-                },
+                "allowed_apps": sorted(scope.allowed_apps),
+            }))]
+
+        case "remove_app":
+            scope = guardian.remove_app(args["app_name"])
+            return [TextContent(type="text", text=json.dumps({
+                "success": True,
+                "allowed_apps": sorted(scope.allowed_apps),
+            }))]
+
+        case "set_region":
+            region = None
+            if args.get("x") is not None:
+                region = {k: args[k] for k in ("x", "y", "width", "height")}
+            scope = guardian.set_region(region)
+            return [TextContent(type="text", text=json.dumps({
+                "success": True,
+                "region": scope.region,
             }))]
 
         case "clear_scope":

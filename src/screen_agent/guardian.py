@@ -32,8 +32,13 @@ class AgentState(Enum):
 
 @dataclass
 class ScopeLock:
-    """Defines the region where the agent is allowed to operate."""
-    window_title: str | None = None
+    """Defines where the agent is allowed to operate.
+
+    allowed_apps: set of app/window name patterns (case-insensitive partial match).
+                  Empty set means no app restriction (all apps allowed).
+    region:       optional pixel region constraint.
+    """
+    allowed_apps: set[str] = field(default_factory=set)
     region: dict | None = None  # {"x": int, "y": int, "width": int, "height": int}
 
     def contains(self, x: int, y: int) -> bool:
@@ -44,6 +49,12 @@ class ScopeLock:
             r["x"] <= x <= r["x"] + r["width"]
             and r["y"] <= y <= r["y"] + r["height"]
         )
+
+    def matches_window(self, app: str, title: str) -> bool:
+        if not self.allowed_apps:
+            return True
+        text = f"{app} {title}".lower()
+        return any(pattern.lower() in text for pattern in self.allowed_apps)
 
 
 @dataclass
@@ -149,18 +160,34 @@ class InputGuardian:
         self._listeners_started = False
         logger.info("Input guardian stopped")
 
-    def set_scope(
-        self,
-        window_title: str | None = None,
-        region: dict | None = None,
-    ) -> ScopeLock:
-        """Restrict agent to a specific window or screen region."""
-        self._scope = ScopeLock(window_title=window_title, region=region)
-        logger.info("Scope locked: %s", self._scope)
+    def _ensure_scope(self) -> ScopeLock:
+        if self._scope is None:
+            self._scope = ScopeLock()
         return self._scope
 
+    def add_app(self, app_name: str) -> ScopeLock:
+        """Add an app to the allowed list. Agent can only operate in allowed apps."""
+        scope = self._ensure_scope()
+        scope.allowed_apps.add(app_name)
+        logger.info("Scope: added '%s' → allowed apps: %s", app_name, scope.allowed_apps)
+        return scope
+
+    def remove_app(self, app_name: str) -> ScopeLock:
+        """Remove an app from the allowed list."""
+        scope = self._ensure_scope()
+        scope.allowed_apps.discard(app_name)
+        logger.info("Scope: removed '%s' → allowed apps: %s", app_name, scope.allowed_apps)
+        return scope
+
+    def set_region(self, region: dict | None) -> ScopeLock:
+        """Restrict agent to a pixel region. Pass None to remove region constraint."""
+        scope = self._ensure_scope()
+        scope.region = region
+        logger.info("Scope: region set to %s", region)
+        return scope
+
     def clear_scope(self) -> None:
-        """Remove scope restrictions."""
+        """Remove all scope restrictions (apps + region)."""
         self._scope = None
         logger.info("Scope cleared — agent can operate anywhere")
 
@@ -204,12 +231,15 @@ class InputGuardian:
                 )
 
         # Check window scope
-        if self._scope and self._scope.window_title:
+        if self._scope and self._scope.allowed_apps:
             match = await self._check_active_window_matches()
             if not match:
                 return ClearanceResult(
                     allowed=False,
-                    reason=f"Active window doesn't match scope: '{self._scope.window_title}'",
+                    reason=(
+                        f"Active window is not in allowed apps. "
+                        f"Allowed: {sorted(self._scope.allowed_apps)}"
+                    ),
                 )
 
         # Wait for user to be idle
@@ -262,7 +292,7 @@ class InputGuardian:
             "seconds_since_input": round(self.seconds_since_user_input, 1),
             "cooldown": self.config.cooldown,
             "scope": {
-                "window": self._scope.window_title if self._scope else None,
+                "allowed_apps": sorted(self._scope.allowed_apps) if self._scope else [],
                 "region": self._scope.region if self._scope else None,
             },
             "guardian_enabled": self.config.enabled,
@@ -283,10 +313,9 @@ class InputGuardian:
         from screen_agent.window import get_active_window
 
         active = await get_active_window()
-        title = self._scope.window_title.lower()
-        return (
-            title in active.get("app", "").lower()
-            or title in active.get("title", "").lower()
+        return self._scope.matches_window(
+            active.get("app", ""),
+            active.get("title", ""),
         )
 
 
