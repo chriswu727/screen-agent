@@ -1,7 +1,7 @@
 """macOS screen capture backend.
 
-Uses mss for cross-platform capture with Retina scale factor
-awareness. All returned dimensions are in logical coordinates.
+Uses mss for capture with Retina scale factor awareness.
+All returned dimensions are in logical coordinates.
 """
 
 from __future__ import annotations
@@ -52,6 +52,9 @@ class MacOSCaptureBackend:
                 (self._config.max_dimension, self._config.max_dimension),
                 Image.LANCZOS,
             )
+            # Update logical dims to match resized image
+            logical_w = int(img.size[0] / scale)
+            logical_h = int(img.size[1] / scale)
 
         data, mime = self._encode(img)
 

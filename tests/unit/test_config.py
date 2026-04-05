@@ -71,3 +71,35 @@ class TestEnvOverrides:
         c = ScreenAgentConfig.from_env()
         assert c.guardian.cooldown_seconds == 1.5
         assert c.input.backend_order == ["ax", "cgevent", "pyautogui"]
+
+
+class TestEnvValidation:
+    def test_invalid_cooldown_not_a_number(self, monkeypatch):
+        monkeypatch.setenv("SCREEN_AGENT_COOLDOWN", "abc")
+        c = ScreenAgentConfig.from_env()
+        assert c.guardian.cooldown_seconds == 1.5  # default preserved
+
+    def test_negative_cooldown_ignored(self, monkeypatch):
+        monkeypatch.setenv("SCREEN_AGENT_COOLDOWN", "-5")
+        c = ScreenAgentConfig.from_env()
+        assert c.guardian.cooldown_seconds == 1.5  # default preserved
+
+    def test_invalid_max_dimension_not_a_number(self, monkeypatch):
+        monkeypatch.setenv("SCREEN_AGENT_MAX_DIMENSION", "foo")
+        c = ScreenAgentConfig.from_env()
+        assert c.capture.max_dimension == 2000  # default preserved
+
+    def test_too_small_max_dimension_ignored(self, monkeypatch):
+        monkeypatch.setenv("SCREEN_AGENT_MAX_DIMENSION", "50")
+        c = ScreenAgentConfig.from_env()
+        assert c.capture.max_dimension == 2000  # default preserved
+
+    def test_unknown_backends_filtered(self, monkeypatch):
+        monkeypatch.setenv("SCREEN_AGENT_INPUT_BACKENDS", "ax,fakeback,cgevent")
+        c = ScreenAgentConfig.from_env()
+        assert c.input.backend_order == ["ax", "cgevent"]
+
+    def test_all_unknown_backends_keeps_default(self, monkeypatch):
+        monkeypatch.setenv("SCREEN_AGENT_INPUT_BACKENDS", "fakeback,otherback")
+        c = ScreenAgentConfig.from_env()
+        assert c.input.backend_order == ["ax", "cgevent", "pyautogui"]  # default

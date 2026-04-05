@@ -1,16 +1,17 @@
-"""CLI entry point for screen-agent."""
+"""CLI entry point for screen-agent (macOS only)."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import platform
 import sys
 
 import typer
 
 app = typer.Typer(
     name="screen-agent",
-    help="Give AI coding tools eyes and hands. An MCP server for screen perception.",
+    help="Give AI coding tools eyes and hands. An MCP server for screen perception (macOS).",
     no_args_is_help=True,
 )
 
@@ -37,6 +38,10 @@ def serve(
     Default transport is stdio, which works directly with Claude Code
     and other MCP clients. Use --transport sse for HTTP-based clients.
     """
+    if platform.system() != "Darwin":
+        typer.echo("Error: screen-agent requires macOS.", err=True)
+        raise typer.Exit(1)
+
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -83,7 +88,8 @@ def serve(
                 Mount("/messages/", app=sse.handle_post_message),
             ],
         )
-        uvicorn.run(starlette_app, host="0.0.0.0", port=port)
+        # Bind to localhost only by default for security
+        uvicorn.run(starlette_app, host="127.0.0.1", port=port)
 
     else:
         typer.echo(f"Unknown transport: {transport}", err=True)
@@ -101,17 +107,20 @@ def version() -> None:
 @app.command()
 def check() -> None:
     """Check system capabilities and permissions."""
-    import platform
-
     typer.echo(f"Platform:  {platform.system()} {platform.machine()}")
     typer.echo(f"Python:    {sys.version.split()[0]}")
+
+    if platform.system() != "Darwin":
+        typer.echo("\nError: screen-agent requires macOS.")
+        raise typer.Exit(1)
 
     # Check core dependencies
     checks = [
         ("mss", "Screen capture"),
-        ("pyautogui", "Input control"),
+        ("pyautogui", "Input control (fallback)"),
         ("PIL", "Image processing"),
         ("mcp", "MCP protocol"),
+        ("pynput", "Input Guardian"),
     ]
     for mod, desc in checks:
         try:
@@ -123,9 +132,9 @@ def check() -> None:
     # Check input backends
     typer.echo("\nInput backends:")
     backends_info = [
-        ("Accessibility (AX)", "ApplicationServices", "Semantic UI actions"),
-        ("CGEvent", "Quartz", "Native event injection"),
-        ("pyautogui", "pyautogui", "Cross-platform fallback"),
+        ("Accessibility (AX)", "ApplicationServices", "Semantic UI actions (highest priority)"),
+        ("CGEvent", "Quartz", "Native event injection (mid priority)"),
+        ("pyautogui", "pyautogui", "Cross-platform fallback (lowest priority)"),
     ]
     for name, mod, desc in backends_info:
         try:
@@ -136,19 +145,24 @@ def check() -> None:
 
     # Check OCR
     typer.echo("\nOCR:")
-    if platform.system() == "Darwin":
-        try:
-            __import__("Vision")
-            typer.echo("  [OK]  Apple Vision Framework")
-        except ImportError:
-            typer.echo("  [--]  Apple Vision (pip install pyobjc-framework-Vision)")
-    else:
-        typer.echo("  [--]  No OCR available on this platform")
+    try:
+        __import__("Vision")
+        typer.echo("  [OK]  Apple Vision Framework")
+    except ImportError:
+        typer.echo("  [--]  Apple Vision (pip install pyobjc-framework-Vision)")
 
-    # Platform notes
-    typer.echo("\nPlatform notes:")
-    if platform.system() == "Darwin":
-        typer.echo("  macOS: Grant Screen Recording & Accessibility permissions in")
-        typer.echo("         System Settings > Privacy & Security")
-    elif platform.system() == "Linux":
-        typer.echo("  Linux: Install wmctrl for window management")
+    # Accessibility permission check
+    typer.echo("\nPermissions:")
+    try:
+        from ApplicationServices import AXIsProcessTrusted
+        if AXIsProcessTrusted():
+            typer.echo("  [OK]  Accessibility access granted")
+        else:
+            typer.echo("  [!!]  Accessibility access NOT granted")
+            typer.echo("         Grant in: System Settings > Privacy & Security > Accessibility")
+    except ImportError:
+        typer.echo("  [--]  Cannot check (ApplicationServices not available)")
+
+    typer.echo("\nNotes:")
+    typer.echo("  Grant Screen Recording & Accessibility permissions in")
+    typer.echo("  System Settings > Privacy & Security")

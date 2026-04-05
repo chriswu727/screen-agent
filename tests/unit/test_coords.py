@@ -43,12 +43,14 @@ class TestCoordinateSpace:
     def test_contains(self):
         cs = CoordinateSpace(scale_factor=1.0, screen_width=1920, screen_height=1080)
         assert cs.contains(Point(0, 0))
-        assert cs.contains(Point(1920, 1080))
+        assert cs.contains(Point(1919, 1079))  # last valid pixel
+        assert not cs.contains(Point(1920, 1080))  # exclusive upper bound
         assert not cs.contains(Point(-1, 0))
         assert not cs.contains(Point(0, 1081))
 
     def test_contains_retina(self):
         cs = CoordinateSpace(scale_factor=2.0, screen_width=1470, screen_height=956)
-        # Logical bounds, not physical
-        assert cs.contains(Point(1470, 956))
+        # Logical bounds, not physical — exclusive upper bound
+        assert cs.contains(Point(1469, 955))  # last valid pixel
+        assert not cs.contains(Point(1470, 956))  # exclusive
         assert not cs.contains(Point(1471, 0))

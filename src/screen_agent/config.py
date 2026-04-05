@@ -6,8 +6,11 @@ Supports environment variable overrides for deployment flexibility.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -66,16 +69,37 @@ class ScreenAgentConfig:
         config = cls()
 
         if v := os.environ.get("SCREEN_AGENT_COOLDOWN"):
-            config.guardian.cooldown_seconds = float(v)
+            try:
+                val = float(v)
+                if val < 0:
+                    logger.warning("SCREEN_AGENT_COOLDOWN must be >= 0, got %s; using default", v)
+                else:
+                    config.guardian.cooldown_seconds = val
+            except ValueError:
+                logger.warning("Invalid SCREEN_AGENT_COOLDOWN value: %r; using default", v)
 
         if os.environ.get("SCREEN_AGENT_GUARDIAN_DISABLED") == "1":
             config.guardian.enabled = False
 
         if v := os.environ.get("SCREEN_AGENT_INPUT_BACKENDS"):
-            config.input.backend_order = [b.strip() for b in v.split(",")]
+            backends = [b.strip() for b in v.split(",") if b.strip()]
+            valid = {"ax", "cgevent", "pyautogui"}
+            invalid = [b for b in backends if b not in valid]
+            if invalid:
+                logger.warning("Unknown input backends ignored: %s", invalid)
+            backends = [b for b in backends if b in valid]
+            if backends:
+                config.input.backend_order = backends
 
         if v := os.environ.get("SCREEN_AGENT_MAX_DIMENSION"):
-            config.capture.max_dimension = int(v)
+            try:
+                val = int(v)
+                if val < 100:
+                    logger.warning("SCREEN_AGENT_MAX_DIMENSION must be >= 100, got %s; using default", v)
+                else:
+                    config.capture.max_dimension = val
+            except ValueError:
+                logger.warning("Invalid SCREEN_AGENT_MAX_DIMENSION value: %r; using default", v)
 
         if v := os.environ.get("SCREEN_AGENT_LOG_LEVEL"):
             config.log_level = v.upper()

@@ -49,6 +49,10 @@ class TestGuardianState:
         g.unlock()
         assert g.state == AgentState.IDLE
 
+    def test_seconds_since_input_initial(self):
+        g = InputGuardian(GuardianConfig(enabled=False))
+        assert g.seconds_since_user_input == float("inf")
+
 
 class TestGuardianScope:
     def test_add_remove_app(self):
@@ -121,3 +125,10 @@ class TestGuardianStatus:
         assert status["state"] == "idle"
         assert "Chrome" in status["scope"]["allowed_apps"]
         assert status["guardian_enabled"] is False
+
+
+class TestGuardianStop:
+    def test_stop_without_start(self):
+        """stop() should be safe to call even if never started."""
+        g = InputGuardian(GuardianConfig(enabled=False))
+        g.stop()  # should not raise

@@ -10,6 +10,7 @@ Default chain on macOS: AX -> CGEvent -> pyautogui
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -52,6 +53,7 @@ class InputChain:
         self._stats: dict[str, dict[str, BackendStats]] = defaultdict(
             lambda: defaultdict(BackendStats)
         )
+        self._stats_lock = threading.Lock()
 
     @property
     def backend_names(self) -> list[str]:
@@ -61,21 +63,23 @@ class InputChain:
     @property
     def stats(self) -> dict[str, dict[str, BackendStats]]:
         """Per-backend, per-action statistics."""
-        return dict(self._stats)
+        with self._stats_lock:
+            return dict(self._stats)
 
     def stats_summary(self) -> dict[str, dict]:
         """Human-readable stats summary."""
-        result = {}
-        for backend_name, actions in self._stats.items():
-            result[backend_name] = {
-                action: {
-                    "success": s.success,
-                    "failure": s.failure,
-                    "rate": f"{s.success_rate:.0%}",
+        with self._stats_lock:
+            result = {}
+            for backend_name, actions in self._stats.items():
+                result[backend_name] = {
+                    action: {
+                        "success": s.success,
+                        "failure": s.failure,
+                        "rate": f"{s.success_rate:.0%}",
+                    }
+                    for action, s in actions.items()
                 }
-                for action, s in actions.items()
-            }
-        return result
+            return result
 
     async def click(
         self, point: Point, button: str = "left", clicks: int = 1
@@ -142,11 +146,12 @@ class InputChain:
         raise InputDeliveryError(action, attempts)
 
     def _record(self, backend: str, action: str, *, success: bool) -> None:
-        stats = self._stats[backend][action]
-        if success:
-            stats.success += 1
-        else:
-            stats.failure += 1
+        with self._stats_lock:
+            stats = self._stats[backend][action]
+            if success:
+                stats.success += 1
+            else:
+                stats.failure += 1
 
 
 def _sanitize_details(kwargs: dict) -> dict:

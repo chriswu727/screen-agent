@@ -26,10 +26,17 @@ class TestRegion:
         r = Region(10, 10, 100, 100)
         assert r.contains(Point(50, 50))
 
-    def test_contains_edge(self):
+    def test_contains_lower_edge(self):
+        """Lower-left corner is inclusive."""
         r = Region(10, 10, 100, 100)
         assert r.contains(Point(10, 10))
-        assert r.contains(Point(110, 110))
+
+    def test_contains_upper_edge_exclusive(self):
+        """Upper bound is exclusive: x+width and y+height are outside."""
+        r = Region(10, 10, 100, 100)
+        assert not r.contains(Point(110, 110))
+        # One pixel inside the upper bound is still valid
+        assert r.contains(Point(109, 109))
 
     def test_contains_outside(self):
         r = Region(10, 10, 100, 100)

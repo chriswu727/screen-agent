@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 import time
 from typing import TYPE_CHECKING
 
@@ -137,17 +138,18 @@ class CGEventInputBackend:
 
     def _type_text_sync(self, text: str) -> bool:
         """Type text via clipboard paste (Cmd+V) for Unicode support."""
-        import subprocess
-
-        # Copy text to clipboard
-        proc = subprocess.run(
-            ["pbcopy"],
-            input=text.encode("utf-8"),
-            capture_output=True,
-            timeout=5,
-        )
-        if proc.returncode != 0:
-            logger.error("pbcopy failed: %s", proc.stderr)
+        try:
+            proc = subprocess.run(
+                ["pbcopy"],
+                input=text.encode("utf-8"),
+                capture_output=True,
+                timeout=5,
+            )
+            if proc.returncode != 0:
+                logger.error("pbcopy failed: %s", proc.stderr)
+                return False
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            logger.error("pbcopy unavailable: %s", e)
             return False
 
         # Press Cmd+V
@@ -214,6 +216,9 @@ class CGEventInputBackend:
         scroll_event = q.CGEventCreateScrollWheelEvent(
             None, q.kCGScrollEventUnitLine, 1, amount
         )
+        if scroll_event is None:
+            logger.error("Failed to create scroll event")
+            return False
         q.CGEventPost(q.kCGHIDEventTap, scroll_event)
         logger.debug("CGEvent scroll amount=%d", amount)
         return True
@@ -263,10 +268,12 @@ class CGEventInputBackend:
             source, down_type, (start.x, start.y), cg_button
         )
         q.CGEventPost(q.kCGHIDEventTap, down)
-        time.sleep(0.1)
 
-        # Interpolate drag path
-        steps = 20
+        # Interpolate drag path using configured duration
+        duration = self._config.drag_duration if self._config else 0.5
+        steps = max(10, int(duration / 0.02))  # ~50fps
+        step_delay = duration / steps
+
         for i in range(1, steps + 1):
             t = i / steps
             x = start.x + (end.x - start.x) * t
@@ -275,7 +282,7 @@ class CGEventInputBackend:
                 source, drag_type, (x, y), cg_button
             )
             q.CGEventPost(q.kCGHIDEventTap, drag)
-            time.sleep(0.02)
+            time.sleep(step_delay)
 
         # Mouse up at end
         up = q.CGEventCreateMouseEvent(
@@ -283,5 +290,5 @@ class CGEventInputBackend:
         )
         q.CGEventPost(q.kCGHIDEventTap, up)
 
-        logger.debug("CGEvent drag from %s to %s", start, end)
+        logger.debug("CGEvent drag from %s to %s (%.0fms)", start, end, duration * 1000)
         return True
