@@ -72,14 +72,17 @@ def _encode(img: Image.Image, format: str = "PNG") -> tuple[str, str]:
 async def capture_screen(
     region: Region | None = None,
     format: str = "PNG",
+    resize: bool = True,
 ) -> ScreenshotResult:
     """Capture a screenshot of the entire screen or a specific region.
 
     Returns base64-encoded image data suitable for LLM vision APIs.
-    Images exceeding 2000px on any side are automatically downscaled.
+    Images exceeding 2000px on any side are automatically downscaled
+    unless resize=False (useful for OCR where pixel coordinates matter).
     """
     img = await asyncio.to_thread(_grab_sync, region)
-    img = _resize_if_needed(img)
+    if resize:
+        img = _resize_if_needed(img)
     data, mime = _encode(img, format)
     return ScreenshotResult(
         image_base64=data,

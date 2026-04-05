@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Give AI coding tools eyes and hands. An MCP server for screen perception and interaction."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 authors = [{ name = "Chris Wu", email = "yichenwujob@gmail.com" }]
 keywords = ["mcp", "screen", "ai", "agent", "claude", "computer-use", "automation"]
 classifiers = [
@@ -16,6 +16,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -49,7 +50,7 @@ screen-agent = "screen_agent.cli:app"
 packages = ["src/screen_agent"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py39"
 line-length = 100
 
 [tool.ruff.lint]

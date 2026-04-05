@@ -59,6 +59,34 @@ OCR_TOOLS: list[Tool] = [
             "required": ["query"],
         },
     ),
+    Tool(
+        name="click_text",
+        description=(
+            "Find text on screen using OCR and click its center. "
+            "Combines find_text + click into one action. "
+            "Returns the OCR match that was clicked, or an error if text not found."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Text to find and click (case-insensitive, partial match)",
+                },
+                "button": {
+                    "type": "string",
+                    "enum": ["left", "right", "middle"],
+                    "default": "left",
+                },
+                "index": {
+                    "type": "integer",
+                    "default": 0,
+                    "description": "Which match to click if multiple found (0=first)",
+                },
+            },
+            "required": ["query"],
+        },
+    ),
 ]
 
 
@@ -117,8 +145,9 @@ ocr_instance = None
 
 
 async def handle_ocr_tool(name: str, args: dict) -> list[dict] | dict:
-    """Handle OCR and find_text tool calls."""
-    screenshot = await capture_screen(region=args.get("region"))
+    """Handle OCR, find_text, and click_text tool calls."""
+    # Use resize=False so OCR coordinates match actual screen pixels
+    screenshot = await capture_screen(region=args.get("region"), resize=False)
     lang = args.get("lang", "en")
     blocks = await asyncio.to_thread(_run_ocr_sync, screenshot["image_base64"], lang)
 
@@ -128,5 +157,33 @@ async def handle_ocr_tool(name: str, args: dict) -> list[dict] | dict:
         if not matches:
             return {"found": False, "query": args["query"], "message": "Text not found on screen"}
         return {"found": True, "query": args["query"], "matches": matches}
+
+    if name == "click_text":
+        query = args["query"].lower()
+        matches = [b for b in blocks if query in b["text"].lower()]
+        if not matches:
+            return {"clicked": False, "query": args["query"], "message": "Text not found on screen"}
+
+        index = args.get("index", 0)
+        if index >= len(matches):
+            return {"clicked": False, "query": args["query"],
+                    "message": f"Only {len(matches)} matches, index {index} out of range"}
+
+        target = matches[index]
+        x, y = target["center"]["x"], target["center"]["y"]
+
+        # Guardian clearance (this is an input action)
+        from screen_agent.guardian import get_guardian
+        guardian = get_guardian()
+        clearance = await guardian.wait_for_clearance(x=x, y=y)
+        if not clearance.allowed:
+            return {"clicked": False, "error": "blocked_by_guardian", "reason": clearance.reason}
+
+        # Perform the click
+        from screen_agent.input import mouse_click
+        button = args.get("button", "left")
+        await mouse_click(x, y, button=button)
+
+        return {"clicked": True, "query": args["query"], "match": target, "x": x, "y": y, "button": button}
 
     return blocks

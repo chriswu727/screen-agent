@@ -43,7 +43,7 @@ async def dispatch_plugin_tool(
     args: dict,
 ) -> list[TextContent | ImageContent]:
     """Route a tool call to the appropriate plugin handler."""
-    if name in ("ocr", "find_text"):
+    if name in ("ocr", "find_text", "click_text"):
         from screen_agent.plugins.ocr import handle_ocr_tool
 
         result = await handle_ocr_tool(name, args)

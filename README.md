@@ -75,18 +75,21 @@ asyncio.run(main())
 | `focus_window` | Focus a window by title |
 | `get_active_window` | Get active window info |
 
+All input tools (click, type_text, press_key, scroll, move_mouse, drag, focus_window) support an optional `verify: true` parameter that captures a screenshot after the action, so the LLM can confirm it worked.
+
 ### Optional: OCR Plugin
 
 ```bash
 pip install screen-agent[ocr]
 ```
 
-Adds two more tools:
+Adds three more tools:
 
 | Tool | Description |
 |------|-------------|
 | `ocr` | Extract all screen text with positions |
 | `find_text` | Find text on screen and get coordinates |
+| `click_text` | Find text and click its center (OCR + click in one step) |
 
 ## Safety: Input Guardian
 
