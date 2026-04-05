@@ -14,4 +14,3 @@ env/
 .ruff_cache/
 *.so
 .DS_Store
-.github/
