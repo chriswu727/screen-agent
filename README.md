@@ -88,6 +88,33 @@ Adds two more tools:
 | `ocr` | Extract all screen text with positions |
 | `find_text` | Find text on screen and get coordinates |
 
+## Safety: Input Guardian
+
+Screen Agent is designed with **user-first** safety:
+
+**User always has priority.** The moment you touch your keyboard or mouse, the agent pauses instantly. It only resumes after you've been idle for 1.5 seconds (configurable). The agent never fights you for control.
+
+**Scope locking.** Before interacting, the agent must declare which window or region it's operating on. Any action outside the scope is rejected.
+
+```
+Claude: [calls set_scope with window_title="Chrome"]
+        I've locked my scope to Chrome. I'll only interact within that window.
+
+        [calls click at (400, 300)]  ← allowed, Chrome is focused
+        [calls click at (100, 50)]   ← rejected if that's outside Chrome
+
+User:   *moves mouse*
+Claude: [paused — waiting for user to finish]
+        ...user stops...
+Claude: [resumes after 1.5s idle] Continuing where I left off.
+```
+
+| Safety Tool | Description |
+|---|---|
+| `set_scope` | Lock agent to a specific window or region |
+| `clear_scope` | Remove scope restrictions |
+| `get_agent_status` | Check guardian state, user activity, current scope |
+
 ## Platform Support
 
 | | Screenshot | Input Control | Window Management |
@@ -110,28 +137,20 @@ Grant them in: **System Settings → Privacy & Security**
 ```
 ┌──────────────────────────────────────────────┐
 │  MCP Client (Claude Code / Cursor / etc.)    │
-│                                              │
-│  "What's on my screen?"                      │
-│       │                                      │
-│       ▼                                      │
-│  ┌─────────────────────────┐                 │
-│  │  capture_screen tool    │──► Screenshot   │
-│  └─────────────────────────┘    returned as  │
-│                                  image to    │
-│  "Click the Submit button"       LLM vision  │
-│       │                                      │
-│       ▼                                      │
-│  ┌─────────────────────────┐                 │
-│  │  click tool             │──► pyautogui    │
-│  └─────────────────────────┘                 │
-└──────────────────────────────────────────────┘
-         ▲                  │
-         │   MCP Protocol   │
-         │   (stdio/SSE)    │
-         ▼                  ▼
+└──────────────┬───────────────────────────────┘
+               │  MCP Protocol (stdio/SSE)
+               ▼
 ┌──────────────────────────────────────────────┐
 │  Screen Agent MCP Server                     │
 │                                              │
+│  ┌────────────────────────────────────────┐  │
+│  │  Input Guardian (pynput)               │  │
+│  │  • Monitors keyboard + mouse globally  │  │
+│  │  • User active? → PAUSE all actions    │  │
+│  │  • Scope lock → reject out-of-bounds   │  │
+│  └────────────────────────────────────────┘  │
+│       │ clearance granted                    │
+│       ▼                                      │
 │  capture.py  ─  mss (cross-platform)         │
 │  input.py    ─  pyautogui                    │
 │  window.py   ─  AppleScript / wmctrl         │

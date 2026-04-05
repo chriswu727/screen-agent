@@ -17,6 +17,7 @@ from mcp.types import (
 )
 
 from screen_agent.capture import capture_screen
+from screen_agent.guardian import ClearanceResult, get_guardian
 from screen_agent.input import (
     drag,
     get_cursor_position,
@@ -30,6 +31,24 @@ from screen_agent.input import (
 from screen_agent.window import focus_window, get_active_window, list_windows
 
 logger = logging.getLogger("screen-agent")
+
+
+# ── Guardian Helper ──────────────────────────────────────────────────────
+
+async def _require_clearance(
+    x: int | None = None,
+    y: int | None = None,
+) -> list[TextContent] | None:
+    """Check guardian before any input action. Returns error content if blocked."""
+    guardian = get_guardian()
+    result = await guardian.wait_for_clearance(x=x, y=y)
+    if not result.allowed:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "blocked_by_guardian",
+            "reason": result.reason,
+            "status": guardian.get_status(),
+        }))]
+    return None
 
 # ── Tool Definitions ─────────────────────────────────────────────────────
 
@@ -194,6 +213,49 @@ TOOLS: list[Tool] = [
         description="Get the currently focused window's app name and title.",
         inputSchema={"type": "object", "properties": {}},
     ),
+    # ── Safety / Guardian Tools ──────────────────────────────────────
+    Tool(
+        name="set_scope",
+        description=(
+            "Restrict agent to only operate within a specific window or screen region. "
+            "Any action outside the scope will be rejected. "
+            "ALWAYS call this before performing a series of interactions."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "window_title": {
+                    "type": "string",
+                    "description": "Restrict to a window matching this title (partial match)",
+                },
+                "region": {
+                    "type": "object",
+                    "description": "Restrict to a screen region",
+                    "properties": {
+                        "x": {"type": "integer"},
+                        "y": {"type": "integer"},
+                        "width": {"type": "integer"},
+                        "height": {"type": "integer"},
+                    },
+                    "required": ["x", "y", "width", "height"],
+                },
+            },
+        },
+    ),
+    Tool(
+        name="clear_scope",
+        description="Remove scope restrictions so agent can operate anywhere.",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="get_agent_status",
+        description=(
+            "Check current agent status: whether user is active, "
+            "current scope restrictions, and guardian state. "
+            "Call this before starting interactions to understand the current state."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
 ]
 
 
@@ -204,7 +266,10 @@ async def _dispatch(
     args: dict,
 ) -> list[TextContent | ImageContent]:
     """Route a tool call to the appropriate handler."""
+    guardian = get_guardian()
+
     match name:
+        # ── Read-only tools (no guardian clearance needed) ────────
         case "capture_screen":
             result = await capture_screen(region=args.get("region"))
             return [
@@ -219,38 +284,6 @@ async def _dispatch(
                 ),
             ]
 
-        case "click":
-            result = await mouse_click(
-                args["x"], args["y"],
-                button=args.get("button", "left"),
-                clicks=args.get("clicks", 1),
-            )
-            return [TextContent(type="text", text=json.dumps(result))]
-
-        case "type_text":
-            result = await keyboard_type(args["text"])
-            return [TextContent(type="text", text=json.dumps(result))]
-
-        case "press_key":
-            result = await press_key(args["key"], modifiers=args.get("modifiers"))
-            return [TextContent(type="text", text=json.dumps(result))]
-
-        case "scroll":
-            result = await scroll(args["amount"], x=args.get("x"), y=args.get("y"))
-            return [TextContent(type="text", text=json.dumps(result))]
-
-        case "move_mouse":
-            result = await mouse_move(args["x"], args["y"])
-            return [TextContent(type="text", text=json.dumps(result))]
-
-        case "drag":
-            result = await drag(
-                args["start_x"], args["start_y"],
-                args["end_x"], args["end_y"],
-                button=args.get("button", "left"),
-            )
-            return [TextContent(type="text", text=json.dumps(result))]
-
         case "get_cursor_position":
             result = await get_cursor_position()
             return [TextContent(type="text", text=json.dumps(result))]
@@ -259,12 +292,87 @@ async def _dispatch(
             result = await list_windows()
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
-        case "focus_window":
-            result = await focus_window(args["title"])
-            return [TextContent(type="text", text=json.dumps(result))]
-
         case "get_active_window":
             result = await get_active_window()
+            return [TextContent(type="text", text=json.dumps(result))]
+
+        # ── Guardian management tools ────────────────────────────
+        case "set_scope":
+            scope = guardian.set_scope(
+                window_title=args.get("window_title"),
+                region=args.get("region"),
+            )
+            return [TextContent(type="text", text=json.dumps({
+                "success": True,
+                "scope": {
+                    "window": scope.window_title,
+                    "region": scope.region,
+                },
+            }))]
+
+        case "clear_scope":
+            guardian.clear_scope()
+            return [TextContent(type="text", text=json.dumps({"success": True}))]
+
+        case "get_agent_status":
+            return [TextContent(type="text", text=json.dumps(guardian.get_status()))]
+
+        # ── Input tools (require guardian clearance) ─────────────
+        case "click":
+            blocked = await _require_clearance(x=args["x"], y=args["y"])
+            if blocked:
+                return blocked
+            result = await mouse_click(
+                args["x"], args["y"],
+                button=args.get("button", "left"),
+                clicks=args.get("clicks", 1),
+            )
+            return [TextContent(type="text", text=json.dumps(result))]
+
+        case "type_text":
+            blocked = await _require_clearance()
+            if blocked:
+                return blocked
+            result = await keyboard_type(args["text"])
+            return [TextContent(type="text", text=json.dumps(result))]
+
+        case "press_key":
+            blocked = await _require_clearance()
+            if blocked:
+                return blocked
+            result = await press_key(args["key"], modifiers=args.get("modifiers"))
+            return [TextContent(type="text", text=json.dumps(result))]
+
+        case "scroll":
+            blocked = await _require_clearance(x=args.get("x"), y=args.get("y"))
+            if blocked:
+                return blocked
+            result = await scroll(args["amount"], x=args.get("x"), y=args.get("y"))
+            return [TextContent(type="text", text=json.dumps(result))]
+
+        case "move_mouse":
+            blocked = await _require_clearance(x=args["x"], y=args["y"])
+            if blocked:
+                return blocked
+            result = await mouse_move(args["x"], args["y"])
+            return [TextContent(type="text", text=json.dumps(result))]
+
+        case "drag":
+            blocked = await _require_clearance(x=args["start_x"], y=args["start_y"])
+            if blocked:
+                return blocked
+            result = await drag(
+                args["start_x"], args["start_y"],
+                args["end_x"], args["end_y"],
+                button=args.get("button", "left"),
+            )
+            return [TextContent(type="text", text=json.dumps(result))]
+
+        case "focus_window":
+            blocked = await _require_clearance()
+            if blocked:
+                return blocked
+            result = await focus_window(args["title"])
             return [TextContent(type="text", text=json.dumps(result))]
 
         case _:
@@ -282,6 +390,10 @@ async def _dispatch(
 def create_server() -> Server:
     """Create and configure the MCP server with all available tools."""
     server = Server("screen-agent")
+
+    # Start input guardian for user-priority safety
+    guardian = get_guardian()
+    guardian.start()
 
     @server.list_tools()
     async def handle_list_tools() -> list[Tool]:
