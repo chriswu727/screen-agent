@@ -1,4 +1,4 @@
-"""Coordinate system management.
+"""Coordinate system management for macOS.
 
 Handles logical <-> physical pixel conversion for Retina and scaled
 displays. All MCP tool parameters use logical coordinates; backends
@@ -7,11 +7,13 @@ that need physical pixels use CoordinateSpace for conversion.
 
 from __future__ import annotations
 
-import platform
+import logging
 from dataclasses import dataclass
 from functools import lru_cache
 
 from screen_agent.types import Point, Region
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,22 +54,12 @@ class CoordinateSpace:
 
     def contains(self, point: Point) -> bool:
         """Check if a logical point is within screen bounds."""
-        return 0 <= point.x <= self.screen_width and 0 <= point.y <= self.screen_height
+        return 0 <= point.x < self.screen_width and 0 <= point.y < self.screen_height
 
 
 @lru_cache(maxsize=1)
 def get_coordinate_space() -> CoordinateSpace:
-    """Detect the current display's coordinate space.
-
-    On macOS, uses Quartz to determine Retina scaling.
-    On other platforms, defaults to 1.0 scale factor.
-    """
-    if platform.system() == "Darwin":
-        return _detect_macos_coordinates()
-    return CoordinateSpace(scale_factor=1.0, screen_width=1920, screen_height=1080)
-
-
-def _detect_macos_coordinates() -> CoordinateSpace:
+    """Detect the current macOS display's coordinate space via Quartz."""
     try:
         import Quartz
 
@@ -82,17 +74,25 @@ def _detect_macos_coordinates() -> CoordinateSpace:
             screen_width=logical_width,
             screen_height=logical_height,
         )
-    except (ImportError, Exception):
-        # Quartz not available; fall back to mss for dimensions
-        try:
-            import mss
+    except ImportError:
+        logger.warning("Quartz not available, falling back to mss for display info")
+    except Exception as e:
+        logger.warning("Quartz display detection failed: %s, falling back to mss", e)
 
-            with mss.mss() as sct:
-                monitor = sct.monitors[1]
-                return CoordinateSpace(
-                    scale_factor=1.0,
-                    screen_width=monitor["width"],
-                    screen_height=monitor["height"],
-                )
-        except Exception:
-            return CoordinateSpace(scale_factor=1.0, screen_width=1920, screen_height=1080)
+    # Fallback: use mss (still accurate on macOS, just no Retina scale)
+    try:
+        import mss
+
+        with mss.mss() as sct:
+            if len(sct.monitors) < 2:
+                logger.warning("No monitor detected by mss, using defaults")
+                return CoordinateSpace(scale_factor=1.0, screen_width=1920, screen_height=1080)
+            monitor = sct.monitors[1]
+            return CoordinateSpace(
+                scale_factor=1.0,
+                screen_width=monitor["width"],
+                screen_height=monitor["height"],
+            )
+    except Exception as e:
+        logger.warning("mss fallback failed: %s, using 1920x1080 defaults", e)
+        return CoordinateSpace(scale_factor=1.0, screen_width=1920, screen_height=1080)

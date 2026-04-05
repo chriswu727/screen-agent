@@ -7,6 +7,7 @@ Handlers receive parsed arguments and return MCP content blocks.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -16,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from mcp.types import ImageContent, TextContent
 
 from screen_agent.errors import (
+    CoordinateOutOfBoundsError,
     ElementNotFoundError,
     GuardianBlockedError,
     ScreenAgentError,
@@ -30,7 +32,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ContentList = list[TextContent | ImageContent]
-HandlerFunc = Callable[..., Awaitable[ContentList]]
+HandlerFunc = Callable[[dict], Awaitable[ContentList]]
 
 # Handler registry
 _handlers: dict[str, HandlerFunc] = {}
@@ -82,14 +84,44 @@ class HandlerContext:
 _ctx: HandlerContext | None = None
 
 
-def set_context(ctx: HandlerContext) -> None:
+def set_context(context: HandlerContext) -> None:
     global _ctx
-    _ctx = ctx
+    _ctx = context
 
 
 def ctx() -> HandlerContext:
-    assert _ctx is not None, "HandlerContext not initialized"
+    if _ctx is None:
+        raise RuntimeError("HandlerContext not initialized — server setup incomplete")
     return _ctx
+
+
+def _parse_point(args: dict, x_key: str = "x", y_key: str = "y") -> Point:
+    """Parse and validate coordinate arguments."""
+    try:
+        x = int(args[x_key])
+        y = int(args[y_key])
+    except (KeyError, TypeError, ValueError) as e:
+        raise CoordinateOutOfBoundsError(
+            args.get(x_key, 0), args.get(y_key, 0),
+            reason=f"Invalid coordinates: {e}",
+        ) from e
+    if x < 0 or y < 0:
+        raise CoordinateOutOfBoundsError(x, y, reason="Coordinates must be non-negative")
+    return Point(x, y)
+
+
+def _parse_region(args: dict, key: str = "region") -> Region | None:
+    """Parse and validate an optional region argument."""
+    r = args.get(key)
+    if not r:
+        return None
+    try:
+        return Region(x=int(r["x"]), y=int(r["y"]), width=int(r["width"]), height=int(r["height"]))
+    except (KeyError, TypeError, ValueError) as e:
+        raise CoordinateOutOfBoundsError(
+            r.get("x", 0), r.get("y", 0),
+            reason=f"Invalid region: {e}",
+        ) from e
 
 
 async def _guardian_check(point: Point | None = None) -> None:
@@ -101,7 +133,7 @@ async def _guardian_check(point: Point | None = None) -> None:
 
 async def _verify_screenshot() -> list[ImageContent]:
     """Capture a verification screenshot after an action."""
-    delay = getattr(getattr(ctx().capture, "_config", None), "post_action_delay", 0.3)
+    delay = ctx().capture._config.post_action_delay if hasattr(ctx().capture, '_config') else 0.3
     await asyncio.sleep(delay)
     result = await ctx().capture.capture()
     return [
@@ -121,9 +153,7 @@ async def _verify_screenshot() -> list[ImageContent]:
 
 @handler("capture_screen")
 async def handle_capture_screen(args: dict) -> ContentList:
-    region = None
-    if r := args.get("region"):
-        region = Region(x=r["x"], y=r["y"], width=r["width"], height=r["height"])
+    region = _parse_region(args)
     result = await ctx().capture.capture(region)
     return [
         ImageContent(
@@ -171,7 +201,7 @@ async def handle_get_cursor_position(args: dict) -> ContentList:
 
 @handler("click")
 async def handle_click(args: dict) -> ContentList:
-    point = Point(args["x"], args["y"])
+    point = _parse_point(args)
     await _guardian_check(point)
     result = await ctx().input_chain.click(
         point, button=args.get("button", "left"), clicks=args.get("clicks", 1),
@@ -185,7 +215,10 @@ async def handle_click(args: dict) -> ContentList:
 @handler("type_text")
 async def handle_type_text(args: dict) -> ContentList:
     await _guardian_check()
-    result = await ctx().input_chain.type_text(args["text"])
+    text = args.get("text", "")
+    if not text:
+        return _text({"error": "Empty text"})
+    result = await ctx().input_chain.type_text(text)
     content = _text({"action": "type_text", **asdict(result)})
     if args.get("verify"):
         content.extend(await _verify_screenshot())
@@ -208,7 +241,7 @@ async def handle_press_key(args: dict) -> ContentList:
 async def handle_scroll(args: dict) -> ContentList:
     point = None
     if "x" in args and "y" in args:
-        point = Point(args["x"], args["y"])
+        point = _parse_point(args)
     await _guardian_check(point)
     result = await ctx().input_chain.scroll(args["amount"], point)
     content = _text({"action": "scroll", **asdict(result)})
@@ -219,7 +252,7 @@ async def handle_scroll(args: dict) -> ContentList:
 
 @handler("move_mouse")
 async def handle_move_mouse(args: dict) -> ContentList:
-    point = Point(args["x"], args["y"])
+    point = _parse_point(args)
     await _guardian_check(point)
     result = await ctx().input_chain.move(point)
     content = _text({"action": "move", **asdict(result)})
@@ -230,8 +263,8 @@ async def handle_move_mouse(args: dict) -> ContentList:
 
 @handler("drag")
 async def handle_drag(args: dict) -> ContentList:
-    start = Point(args["start_x"], args["start_y"])
-    end = Point(args["end_x"], args["end_y"])
+    start = _parse_point(args, "start_x", "start_y")
+    end = _parse_point(args, "end_x", "end_y")
     await _guardian_check(start)
     result = await ctx().input_chain.drag(start, end, button=args.get("button", "left"))
     content = _text({"action": "drag", **asdict(result)})
@@ -257,13 +290,10 @@ async def handle_ocr(args: dict) -> ContentList:
     if not ctx().ocr or not ctx().ocr.available():
         return _text({"error": "OCR not available on this system"})
 
-    region = None
-    if r := args.get("region"):
-        region = Region(x=r["x"], y=r["y"], width=r["width"], height=r["height"])
+    region = _parse_region(args)
 
     # Capture screenshot first
     result = await ctx().capture.capture(region, resize=False)
-    import base64
     image_data = base64.b64decode(result["image_base64"])
 
     blocks = await ctx().ocr.recognize(image_data, lang=args.get("lang", "en"))
@@ -281,7 +311,6 @@ async def handle_find_text(args: dict) -> ContentList:
         return _text({"error": "OCR not available on this system"})
 
     result = await ctx().capture.capture(resize=False)
-    import base64
     image_data = base64.b64decode(result["image_base64"])
 
     blocks = await ctx().ocr.recognize(image_data)
@@ -302,7 +331,6 @@ async def handle_click_text(args: dict) -> ContentList:
         return _text({"error": "OCR not available on this system"})
 
     result = await ctx().capture.capture(resize=False)
-    import base64
     image_data = base64.b64decode(result["image_base64"])
 
     blocks = await ctx().ocr.recognize(image_data)
@@ -312,8 +340,10 @@ async def handle_click_text(args: dict) -> ContentList:
         raise ElementNotFoundError(args["query"])
 
     idx = args.get("index", 0)
-    if idx >= len(matches):
-        idx = 0
+    if idx < 0 or idx >= len(matches):
+        raise ElementNotFoundError(
+            f"{args['query']} (index {idx} out of range, {len(matches)} matches found)"
+        )
     target = matches[idx]
 
     await _guardian_check(target.center)

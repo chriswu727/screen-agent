@@ -1,14 +1,14 @@
-"""pyautogui-based input backend.
+"""pyautogui-based input backend for macOS.
 
-Cross-platform fallback backend. Works on macOS, Linux, and Windows
-but has lower reliability for games and Electron apps.
+Lowest-priority fallback backend. Works for most apps but has lower
+reliability for games and Electron apps compared to CGEvent.
+Uses clipboard paste for Unicode support.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import platform
 import subprocess
 import time
 from typing import TYPE_CHECKING
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class PyAutoGUIInputBackend:
-    """Input backend wrapping pyautogui."""
+    """Input backend wrapping pyautogui (macOS)."""
 
     def __init__(self, config: InputConfig | None = None):
         self._config = config
@@ -68,8 +68,8 @@ class PyAutoGUIInputBackend:
 
     def _type_text_sync(self, text: str) -> bool:
         self._ensure_pyautogui()
-        if platform.system() == "Darwin":
-            # Use clipboard paste for Unicode support on macOS
+        # Use clipboard paste for Unicode support on macOS
+        try:
             proc = subprocess.run(
                 ["pbcopy"],
                 input=text.encode("utf-8"),
@@ -77,12 +77,14 @@ class PyAutoGUIInputBackend:
                 timeout=5,
             )
             if proc.returncode != 0:
+                logger.warning("pbcopy failed: %s", proc.stderr)
                 return False
-            self._pyautogui.hotkey("command", "v")
-            time.sleep(0.1)
-        else:
-            self._pyautogui.write(text, interval=0.02)
-        logger.debug("pyautogui typed %d chars", len(text))
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            logger.warning("pbcopy unavailable: %s", e)
+            return False
+        self._pyautogui.hotkey("command", "v")
+        time.sleep(0.1)
+        logger.debug("pyautogui typed %d chars via clipboard", len(text))
         return True
 
     async def press_key(

@@ -13,6 +13,7 @@ from mcp.server import Server
 from screen_agent.config import ScreenAgentConfig
 from screen_agent.engine.guardian import InputGuardian
 from screen_agent.engine.input_chain import InputChain
+from screen_agent.errors import ScreenAgentError
 from screen_agent.mcp.handlers import (
     HandlerContext,
     _error,
@@ -42,15 +43,27 @@ def create_server(config: ScreenAgentConfig | None = None) -> Server:
     )
 
     # Initialize platform backends
-    input_backends = get_input_backends(config)
-    capture = get_capture_backend()
-    window = get_window_backend()
-    ocr = get_ocr_backend()
+    try:
+        input_backends = get_input_backends(config)
+        capture = get_capture_backend()
+        window = get_window_backend()
+    except Exception as e:
+        logger.error("Failed to initialize platform backends: %s", e)
+        raise
+
+    ocr = None
+    try:
+        ocr = get_ocr_backend()
+    except Exception as e:
+        logger.warning("OCR backend unavailable: %s", e)
 
     # Initialize engine
     input_chain = InputChain(input_backends)
     guardian = InputGuardian(config.guardian)
-    guardian.start()
+    try:
+        guardian.start()
+    except Exception as e:
+        logger.warning("Guardian failed to start: %s — safety system disabled", e)
 
     # Wire up handler context
     set_context(HandlerContext(
@@ -76,12 +89,10 @@ def create_server(config: ScreenAgentConfig | None = None) -> Server:
 
         try:
             return await handler(arguments or {})
+        except ScreenAgentError as e:
+            logger.warning("Tool '%s' blocked: %s", name, e)
+            return _error(e)
         except Exception as e:
-            from screen_agent.errors import ScreenAgentError
-
-            if isinstance(e, ScreenAgentError):
-                logger.warning("Tool '%s' blocked: %s", name, e)
-                return _error(e)
             logger.exception("Tool '%s' failed unexpectedly", name)
             return _text({"error": {"code": "INTERNAL_ERROR", "message": str(e)}})
 

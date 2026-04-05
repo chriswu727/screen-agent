@@ -28,8 +28,8 @@ class Region:
 
     def contains(self, point: Point) -> bool:
         return (
-            self.x <= point.x <= self.x + self.width
-            and self.y <= point.y <= self.y + self.height
+            self.x <= point.x < self.x + self.width
+            and self.y <= point.y < self.y + self.height
         )
 
     @property

@@ -1,8 +1,8 @@
-"""Platform detection and backend factory.
+"""Platform backend factory — macOS only.
 
-Detects the current OS and returns the appropriate backend
-implementations. Backends are lazily imported to avoid pulling
-in platform-specific dependencies on the wrong OS.
+Returns macOS-specific backend implementations.
+Backends are lazily imported to avoid pulling in optional dependencies
+until they are actually needed.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import platform
 from typing import TYPE_CHECKING
 
 from screen_agent.config import ScreenAgentConfig
+from screen_agent.errors import PlatformNotSupportedError
 
 if TYPE_CHECKING:
     from screen_agent.platform.protocols import (
@@ -26,60 +27,15 @@ logger = logging.getLogger(__name__)
 _SYSTEM = platform.system()
 
 
+def _require_macos(operation: str) -> None:
+    if _SYSTEM != "Darwin":
+        raise PlatformNotSupportedError(operation, _SYSTEM)
+
+
 def get_input_backends(config: ScreenAgentConfig) -> list[InputBackend]:
     """Return available input backends in configured priority order."""
-    if _SYSTEM == "Darwin":
-        return _get_macos_input_backends(config)
-    if _SYSTEM == "Linux":
-        return _get_linux_input_backends(config)
-    logger.warning("No input backends available for %s", _SYSTEM)
-    return []
+    _require_macos("input backends")
 
-
-def get_capture_backend() -> CaptureBackend:
-    """Return the capture backend for the current platform."""
-    if _SYSTEM == "Darwin":
-        from screen_agent.platform.macos.capture import MacOSCaptureBackend
-
-        return MacOSCaptureBackend()
-
-    from screen_agent.platform.macos.capture import MacOSCaptureBackend
-
-    # mss-based capture works cross-platform
-    return MacOSCaptureBackend()
-
-
-def get_window_backend() -> WindowBackend:
-    """Return the window management backend for the current platform."""
-    if _SYSTEM == "Darwin":
-        from screen_agent.platform.macos.window import MacOSWindowBackend
-
-        return MacOSWindowBackend()
-    if _SYSTEM == "Linux":
-        from screen_agent.platform.linux.window import LinuxWindowBackend
-
-        return LinuxWindowBackend()
-    from screen_agent.platform.macos.window import MacOSWindowBackend
-
-    return MacOSWindowBackend()
-
-
-def get_ocr_backend() -> OCRBackend | None:
-    """Return the OCR backend if available, or None."""
-    if _SYSTEM == "Darwin":
-        try:
-            from screen_agent.platform.macos.vision import VisionOCRBackend
-
-            backend = VisionOCRBackend()
-            if backend.available():
-                return backend
-        except ImportError:
-            logger.debug("Apple Vision Framework not available")
-    return None
-
-
-def _get_macos_input_backends(config: ScreenAgentConfig) -> list[InputBackend]:
-    """Build macOS input backend list in configured priority order."""
     registry: dict[str, type] = {}
 
     try:
@@ -115,15 +71,31 @@ def _get_macos_input_backends(config: ScreenAgentConfig) -> list[InputBackend]:
     return backends
 
 
-def _get_linux_input_backends(config: ScreenAgentConfig) -> list[InputBackend]:
-    """Build Linux input backend list."""
-    backends: list[InputBackend] = []
-    try:
-        from screen_agent.platform.macos.input_pyautogui import PyAutoGUIInputBackend
+def get_capture_backend() -> CaptureBackend:
+    """Return the macOS capture backend."""
+    _require_macos("screen capture")
+    from screen_agent.platform.macos.capture import MacOSCaptureBackend
 
-        backend = PyAutoGUIInputBackend(config.input)
+    return MacOSCaptureBackend()
+
+
+def get_window_backend() -> WindowBackend:
+    """Return the macOS window management backend."""
+    _require_macos("window management")
+    from screen_agent.platform.macos.window import MacOSWindowBackend
+
+    return MacOSWindowBackend()
+
+
+def get_ocr_backend() -> OCRBackend | None:
+    """Return the Vision OCR backend if available, or None."""
+    _require_macos("OCR")
+    try:
+        from screen_agent.platform.macos.vision import VisionOCRBackend
+
+        backend = VisionOCRBackend()
         if backend.available():
-            backends.append(backend)
+            return backend
     except ImportError:
-        pass
-    return backends
+        logger.debug("Apple Vision Framework not available")
+    return None

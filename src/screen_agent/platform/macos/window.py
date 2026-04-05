@@ -1,8 +1,8 @@
 """macOS window management backend.
 
 Uses AppleScript via osascript for window listing and focus.
-This is the same approach as the original code, but wrapped
-in the WindowBackend protocol with proper error handling.
+Uses a tab delimiter (\\t) instead of || to avoid injection issues
+when window titles contain special characters.
 """
 
 from __future__ import annotations
@@ -14,11 +14,10 @@ from screen_agent.types import WindowInfo
 
 logger = logging.getLogger(__name__)
 
-# AppleScript that returns JSON-formatted window list
-_LIST_WINDOWS_SCRIPT = """
-use framework "Foundation"
-use scripting additions
+_DELIMITER = "\t"
 
+# AppleScript that returns tab-delimited window list
+_LIST_WINDOWS_SCRIPT = """
 tell application "System Events"
     set windowData to {}
     repeat with proc in (every process whose visible is true)
@@ -33,8 +32,8 @@ tell application "System Events"
                 set posY to (item 2 of winPos as text)
                 set szW to (item 1 of winSize as text)
                 set szH to (item 2 of winSize as text)
-                set entry to procName & "||" & winName & "||" & procID
-                set entry to entry & "||" & posX & "||" & posY & "||" & szW & "||" & szH
+                set entry to procName & tab & winName & tab & procID
+                set entry to entry & tab & posX & tab & posY & tab & szW & tab & szH
                 set end of windowData to entry
             end try
         end repeat
@@ -54,7 +53,7 @@ on run argv
                     if name of win contains targetTitle then
                         set frontmost of proc to true
                         perform action "AXRaise" of win
-                        return name of proc & "||" & name of win
+                        return name of proc & tab & name of win
                     end if
                 end try
             end repeat
@@ -74,7 +73,7 @@ tell application "System Events"
     on error
         set winName to ""
     end try
-    return procName & "||" & winName & "||" & procID
+    return procName & tab & winName & tab & procID
 end tell
 """
 
@@ -89,7 +88,7 @@ class MacOSWindowBackend:
 
         windows = []
         for line in raw.splitlines():
-            parts = line.split("||")
+            parts = line.split(_DELIMITER)
             if len(parts) >= 7:
                 try:
                     windows.append(WindowInfo(
@@ -109,7 +108,7 @@ class MacOSWindowBackend:
         raw = await self._run_osascript(_ACTIVE_WINDOW_SCRIPT)
         if not raw:
             return None
-        parts = raw.split("||")
+        parts = raw.split(_DELIMITER)
         if len(parts) >= 3:
             try:
                 return WindowInfo(
@@ -124,7 +123,7 @@ class MacOSWindowBackend:
     async def focus_window(self, title: str) -> bool:
         raw = await self._run_osascript(_FOCUS_WINDOW_SCRIPT, [title])
         if raw and raw != "NOT_FOUND":
-            parts = raw.split("||")
+            parts = raw.split(_DELIMITER)
             if len(parts) >= 2:
                 logger.info("Focused window: %s - %s", parts[0], parts[1])
                 return True
@@ -147,7 +146,7 @@ class MacOSWindowBackend:
                 proc.communicate(), timeout=10.0
             )
             if proc.returncode != 0:
-                logger.debug("osascript error: %s", stderr.decode())
+                logger.debug("osascript error: %s", stderr.decode("utf-8", errors="replace"))
                 return ""
             return stdout.decode("utf-8").strip()
         except asyncio.TimeoutError:
