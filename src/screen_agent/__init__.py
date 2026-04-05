@@ -1,18 +1,7 @@
-"""Screen Agent - Give AI coding tools eyes and hands."""
+"""Screen Agent — Give AI agents eyes and hands on the desktop."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
-from screen_agent.capture import capture_screen, capture_region
-from screen_agent.input import mouse_click, keyboard_type, press_key, scroll, drag
-from screen_agent.server import create_server
+from screen_agent.mcp.server import create_server
 
-__all__ = [
-    "capture_screen",
-    "capture_region",
-    "mouse_click",
-    "keyboard_type",
-    "press_key",
-    "scroll",
-    "drag",
-    "create_server",
-]
+__all__ = ["create_server"]

@@ -1,34 +1,63 @@
 # Screen Agent
 
-**Give AI coding tools eyes and hands.**
+**Give AI agents eyes and hands on the desktop.**
 
-An [MCP](https://modelcontextprotocol.io/) server that lets Claude Code, Cursor, and other AI tools see your screen and interact with your desktop.
-
-<!-- TODO: Replace with actual demo GIF -->
-<!-- ![Demo](docs/demo.gif) -->
+An [MCP](https://modelcontextprotocol.io/) server that lets AI tools (Claude Code, Cursor, etc.) see your screen and interact with any application — with a multi-backend input system that works where others fail.
 
 ## Why?
 
-AI coding assistants are powerful but blind — they can edit files and run commands, but they can't see what's on your screen. Screen Agent fixes that by providing screen capture and desktop interaction as MCP tools.
+AI coding assistants are powerful but blind. Screen Agent fixes that with:
+
+- **Multi-Backend Input Chain** — three input methods (Accessibility API → CGEvent → pyautogui) tried in priority order with automatic fallback. Works with native apps, Electron apps, and game engines.
+- **Input Guardian** — real-time safety system that pauses all agent actions when you touch your mouse or keyboard. No other tool provides this.
+- **Apple Vision OCR** — zero-dependency text recognition on macOS (no 2GB PaddleOCR install needed).
+- **Retina-Aware Coordinates** — unified logical coordinate system that handles display scaling correctly.
+
+## Architecture
 
 ```
-You: "The form in the browser has a bug — can you see it?"
-Claude: [captures screen] I see the registration form. The email
-        validation shows an error even though the format is correct.
-        The regex pattern in validators.ts is too restrictive...
+┌──────────────────────────────────┐
+│          MCP Layer               │  19 tools via Model Context Protocol
+├──────────────────────────────────┤
+│          Engine Layer            │  InputChain (fallback) + Guardian (safety)
+├──────────────────────────────────┤
+│        Platform Layer            │  Protocol-based backends
+│  AX → CGEvent → pyautogui       │  macOS / Linux
+└──────────────────────────────────┘
 ```
+
+### Input Backend Chain
+
+The core design challenge: `pyautogui` works for ~80% of apps but fails for game engines and many Electron apps. Screen Agent solves this with a **Chain of Responsibility** pattern:
+
+| Priority | Backend | Method | Best For |
+|----------|---------|--------|----------|
+| 1 | **AX** | `AXPerformAction` | Native macOS apps — semantic, no coordinates needed |
+| 2 | **CGEvent** | `CGEventPost` | Games, Electron — native OS event injection |
+| 3 | **pyautogui** | Python wrapper | Cross-platform fallback |
+
+Each backend implements the same `InputBackend` protocol. If one fails, the chain automatically tries the next. All attempts are logged with telemetry for observability.
 
 ## Install
 
 ```bash
 pip install screen-agent
+
+# Recommended: install macOS native backends
+pip install screen-agent[macos]
 ```
 
 ## Quick Start
 
-### Use with Claude Code
+### With Claude Code
 
-1. Add to your MCP config (`~/.claude/mcp.json` or `.mcp.json`):
+```bash
+claude mcp add screen -- screen-agent serve
+```
+
+### With Cursor / other MCP clients
+
+Add to your MCP config:
 
 ```json
 {
@@ -41,157 +70,97 @@ pip install screen-agent
 }
 ```
 
-2. Restart Claude Code. That's it — Claude can now see your screen.
-
-### Use as Python library
-
-```python
-import asyncio
-from screen_agent import capture_screen, mouse_click, keyboard_type
-
-async def main():
-    screenshot = await capture_screen()
-    print(f"Captured {screenshot['width']}x{screenshot['height']}px")
-
-    await mouse_click(400, 300)
-    await keyboard_type("Hello from screen-agent!")
-
-asyncio.run(main())
-```
-
-## Tools
-
-| Tool | Description |
-|------|-------------|
-| `capture_screen` | Screenshot the full screen or a region |
-| `click` | Click at screen coordinates |
-| `type_text` | Type text at cursor position |
-| `press_key` | Press key / key combo (e.g. Cmd+C) |
-| `scroll` | Scroll up or down |
-| `move_mouse` | Move cursor |
-| `drag` | Click and drag |
-| `get_cursor_position` | Get cursor coordinates |
-| `list_windows` | List visible windows |
-| `focus_window` | Focus a window by title |
-| `get_active_window` | Get active window info |
-
-All input tools (click, type_text, press_key, scroll, move_mouse, drag, focus_window) support an optional `verify: true` parameter that captures a screenshot after the action, so the LLM can confirm it worked.
-
-### Optional: OCR Plugin
-
-```bash
-pip install screen-agent[ocr]
-```
-
-Adds three more tools:
-
-| Tool | Description |
-|------|-------------|
-| `ocr` | Extract all screen text with positions |
-| `find_text` | Find text on screen and get coordinates |
-| `click_text` | Find text and click its center (OCR + click in one step) |
-
-## Safety: Input Guardian
-
-Screen Agent is designed with **user-first** safety:
-
-**User always has priority.** The moment you touch your keyboard or mouse, the agent pauses instantly. It only resumes after you've been idle for 1.5 seconds (configurable). The agent never fights you for control.
-
-**App allowlist.** The agent must declare which apps it needs access to. It can only interact with apps on the list. Need to work across Chrome and Figma? Just add both.
-
-```
-Claude: [calls add_app("Chrome")]
-        [calls add_app("Figma")]
-        I can now operate in Chrome and Figma.
-
-        [clicks in Chrome]      ← allowed
-        [clicks in Figma]       ← allowed
-        [clicks in Slack]       ← rejected, not on the list
-
-User:   *moves mouse*
-Claude: [paused — waiting for user to finish]
-        ...user stops...
-Claude: [resumes after 1.5s idle] Continuing where I left off.
-```
-
-| Safety Tool | Description |
-|---|---|
-| `add_app` | Add an app to the allowed list (e.g. "Chrome", "Figma") |
-| `remove_app` | Remove an app from the allowed list |
-| `set_region` | Restrict to a pixel region on screen |
-| `clear_scope` | Remove all restrictions |
-| `get_agent_status` | Check guardian state, user activity, allowed apps |
-
-## Platform Support
-
-| | Screenshot | Input Control | Window Management |
-|---|---|---|---|
-| **macOS** | mss | pyautogui | AppleScript |
-| **Linux** | mss | pyautogui | wmctrl |
-| **Windows** | mss | pyautogui | Planned |
-
-### macOS Permissions
-
-Screen Agent needs two permissions on macOS:
-
-- **Screen Recording** — for screenshots
-- **Accessibility** — for keyboard/mouse control
-
-Grant them in: **System Settings → Privacy & Security**
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────┐
-│  MCP Client (Claude Code / Cursor / etc.)    │
-└──────────────┬───────────────────────────────┘
-               │  MCP Protocol (stdio/SSE)
-               ▼
-┌──────────────────────────────────────────────┐
-│  Screen Agent MCP Server                     │
-│                                              │
-│  ┌────────────────────────────────────────┐  │
-│  │  Input Guardian (pynput)               │  │
-│  │  • Monitors keyboard + mouse globally  │  │
-│  │  • User active? → PAUSE all actions    │  │
-│  │  • Scope lock → reject out-of-bounds   │  │
-│  └────────────────────────────────────────┘  │
-│       │ clearance granted                    │
-│       ▼                                      │
-│  capture.py  ─  mss (cross-platform)         │
-│  input.py    ─  pyautogui                    │
-│  window.py   ─  AppleScript / wmctrl         │
-│  plugins/    ─  OCR, CV (optional)           │
-└──────────────────────────────────────────────┘
-```
-
-## Configuration
-
-### Transport modes
-
-```bash
-# stdio (default) — for Claude Code and most MCP clients
-screen-agent serve
-
-# SSE — for HTTP-based clients
-screen-agent serve --transport sse --port 8765
-```
-
-### System check
+### Check system capabilities
 
 ```bash
 screen-agent check
 ```
 
-Verifies all dependencies and platform permissions.
+## Tools
+
+### Perception
+| Tool | Description |
+|------|-------------|
+| `capture_screen` | Screenshot (full or region), returns image for vision analysis |
+| `list_windows` | List all visible windows with positions |
+| `get_active_window` | Currently focused window |
+| `get_cursor_position` | Current mouse position |
+
+### Input (all support `verify: true` for post-action screenshots)
+| Tool | Description |
+|------|-------------|
+| `click` | Click at coordinates (left/right/middle, multi-click) |
+| `type_text` | Type text at cursor (Unicode via clipboard on macOS) |
+| `press_key` | Key press with modifiers (e.g., Cmd+C) |
+| `scroll` | Scroll wheel at optional position |
+| `move_mouse` | Move cursor without clicking |
+| `drag` | Click-drag between two points |
+| `focus_window` | Bring window to front by partial title match |
+
+### OCR (requires macOS with Vision framework)
+| Tool | Description |
+|------|-------------|
+| `ocr` | Extract all text with bounding boxes |
+| `find_text` | Find text and return location |
+| `click_text` | Find text and click its center |
+
+### Safety (Input Guardian)
+| Tool | Description |
+|------|-------------|
+| `add_app` | Add app to allowlist — agent can ONLY interact with listed apps |
+| `remove_app` | Remove from allowlist |
+| `set_region` | Restrict to pixel region |
+| `clear_scope` | Remove all restrictions |
+| `get_agent_status` | Guardian state, backend stats, scope info |
+
+## Input Guardian
+
+Screen Agent's unique safety system with two guarantees:
+
+1. **User Priority** — any keyboard/mouse activity instantly pauses the agent. It resumes only after you've been idle for 1.5s (configurable).
+2. **Scope Lock** — restrict the agent to specific apps and/or screen regions.
+
+```python
+# Agent can only interact with Chrome and Figma
+add_app("Chrome")
+add_app("Figma")
+
+# Or restrict to a region
+set_region(x=0, y=0, width=800, height=600)
+```
+
+## Configuration
+
+All parameters are configurable via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SCREEN_AGENT_COOLDOWN` | 1.5 | Guardian cooldown seconds |
+| `SCREEN_AGENT_GUARDIAN_DISABLED` | 0 | Set to "1" to disable |
+| `SCREEN_AGENT_INPUT_BACKENDS` | ax,cgevent,pyautogui | Backend priority order |
+| `SCREEN_AGENT_MAX_DIMENSION` | 2000 | Max screenshot dimension |
+| `SCREEN_AGENT_LOG_LEVEL` | INFO | Logging level |
+
+## Platform Support
+
+| Feature | macOS | Linux |
+|---------|-------|-------|
+| Screenshot | ✅ mss | ✅ mss |
+| AX Input | ✅ | — |
+| CGEvent Input | ✅ | — |
+| pyautogui Input | ✅ | ✅ |
+| Window Management | ✅ AppleScript | ✅ wmctrl |
+| OCR | ✅ Vision Framework | — |
+| Retina Scaling | ✅ | — |
 
 ## Development
 
 ```bash
-git clone https://github.com/chriswu727/screen-agent.git
+git clone https://github.com/chriswu727/screen-agent
 cd screen-agent
-pip install -e ".[dev]"
-pytest
+pip install -e ".[dev,macos]"
+pytest tests/unit/ -v
+ruff check src/ tests/
 ```
 
 ## License

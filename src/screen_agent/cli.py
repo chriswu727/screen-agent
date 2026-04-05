@@ -43,7 +43,7 @@ def serve(
         stream=sys.stderr,
     )
 
-    from screen_agent.server import create_server
+    from screen_agent.mcp.server import create_server
 
     server = create_server()
 
@@ -61,10 +61,10 @@ def serve(
         asyncio.run(run_stdio())
 
     elif transport == "sse":
+        import uvicorn
         from mcp.server.sse import SseServerTransport
         from starlette.applications import Starlette
         from starlette.routing import Mount, Route
-        import uvicorn
 
         sse = SseServerTransport("/messages/")
 
@@ -120,22 +120,35 @@ def check() -> None:
         except ImportError:
             typer.echo(f"  [MISSING]  {desc} ({mod})")
 
-    # Check optional plugins
-    typer.echo("\nOptional plugins:")
-    try:
-        __import__("paddleocr")
-        typer.echo("  [OK]  OCR (paddleocr)")
-    except ImportError:
-        typer.echo("  [--]  OCR (pip install screen-agent[ocr])")
+    # Check input backends
+    typer.echo("\nInput backends:")
+    backends_info = [
+        ("Accessibility (AX)", "ApplicationServices", "Semantic UI actions"),
+        ("CGEvent", "Quartz", "Native event injection"),
+        ("pyautogui", "pyautogui", "Cross-platform fallback"),
+    ]
+    for name, mod, desc in backends_info:
+        try:
+            __import__(mod)
+            typer.echo(f"  [OK]  {name} — {desc}")
+        except ImportError:
+            typer.echo(f"  [--]  {name} — {desc} (not installed)")
 
-    # Platform-specific checks
-    typer.echo(f"\nPlatform notes:")
+    # Check OCR
+    typer.echo("\nOCR:")
+    if platform.system() == "Darwin":
+        try:
+            __import__("Vision")
+            typer.echo("  [OK]  Apple Vision Framework")
+        except ImportError:
+            typer.echo("  [--]  Apple Vision (pip install pyobjc-framework-Vision)")
+    else:
+        typer.echo("  [--]  No OCR available on this platform")
+
+    # Platform notes
+    typer.echo("\nPlatform notes:")
     if platform.system() == "Darwin":
         typer.echo("  macOS: Grant Screen Recording & Accessibility permissions in")
         typer.echo("         System Settings > Privacy & Security")
     elif platform.system() == "Linux":
-        try:
-            __import__("Xlib")
-            typer.echo("  [OK]  X11 display server detected")
-        except ImportError:
-            typer.echo("  [--]  python-xlib not found (needed for some features)")
+        typer.echo("  Linux: Install wmctrl for window management")

@@ -4,19 +4,18 @@ build-backend = "hatchling.build"
 
 [project]
 name = "screen-agent"
-version = "0.1.0"
-description = "Give AI coding tools eyes and hands. An MCP server for screen perception and interaction."
+version = "0.2.0"
+description = "Give AI agents eyes and hands on the desktop. An MCP server for screen perception and interaction with multi-backend input chain."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [{ name = "Chris Wu", email = "yichenwujob@gmail.com" }]
-keywords = ["mcp", "screen", "ai", "agent", "claude", "computer-use", "automation"]
+keywords = ["mcp", "screen", "ai", "agent", "claude", "computer-use", "automation", "accessibility"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -34,8 +33,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ocr = ["paddleocr>=2.7.0", "paddlepaddle>=2.5.0"]
+# macOS native backends (recommended)
+macos = [
+    "pyobjc-framework-Quartz>=10.0",
+    "pyobjc-framework-ApplicationServices>=10.0",
+    "pyobjc-framework-Vision>=10.0",
+]
+# HTTP transport
 api = ["fastapi>=0.110.0", "uvicorn>=0.29.0"]
+# Development
 dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "ruff>=0.4.0"]
 
 [project.urls]
@@ -50,7 +56,7 @@ screen-agent = "screen_agent.cli:app"
 packages = ["src/screen_agent"]
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
