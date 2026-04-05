@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "screen-agent"
+version = "0.1.0"
+description = "Give AI coding tools eyes and hands. An MCP server for screen perception and interaction."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Chris Wu", email = "yichenwujob@gmail.com" }]
+keywords = ["mcp", "screen", "ai", "agent", "claude", "computer-use", "automation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "mcp>=1.0.0",
+    "mss>=9.0.0",
+    "pyautogui>=0.9.54",
+    "Pillow>=10.0.0",
+    "typer>=0.12.0",
+]
+
+[project.optional-dependencies]
+ocr = ["paddleocr>=2.7.0", "paddlepaddle>=2.5.0"]
+api = ["fastapi>=0.110.0", "uvicorn>=0.29.0"]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "ruff>=0.4.0"]
+
+[project.urls]
+Homepage = "https://github.com/chriswu727/screen-agent"
+Repository = "https://github.com/chriswu727/screen-agent"
+Issues = "https://github.com/chriswu727/screen-agent/issues"
+
+[project.scripts]
+screen-agent = "screen_agent.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/screen_agent"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
