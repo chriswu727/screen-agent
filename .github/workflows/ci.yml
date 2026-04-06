@@ -6,32 +6,380 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  # ── Unit Tests (macOS, multi-Python) ─────────────────────────
+  unit-tests:
+    name: Unit Tests (Python ${{ matrix.python-version }})
     runs-on: macos-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12"]
+        python-version: ["3.10", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
-      - name: Run tests
-        run: pytest tests/unit/ -v --tb=short
 
-  lint:
-    runs-on: ubuntu-latest
+      - name: Install dependencies
+        run: pip install -e ".[dev,macos]"
+
+      - name: Run unit tests
+        run: pytest tests/unit/ -v --tb=short --timeout=30
+
+  # ── Integration Tests (MCP handler flow with mock backends) ──
+  integration-tests:
+    name: Integration Tests (MCP Flow)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev,macos]"
+
+      - name: Run integration tests
+        run: pytest tests/integration/ -v --tb=short --timeout=30
+
+  # ── MCP Server Smoke Test ────────────────────────────────────
+  mcp-smoke:
+    name: MCP Server Smoke Test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev,macos]"
+
+      - name: Verify server boots and lists tools via stdio
+        run: |
+          python -c "
+          import asyncio
+          import json
+          from screen_agent.mcp.server import create_server
+          from screen_agent.mcp.tools import TOOLS
+
+          async def smoke():
+              server = create_server()
+
+              # Verify tool listing
+              tools = TOOLS
+              print(f'Server registered {len(tools)} tools:')
+              for t in tools:
+                  print(f'  - {t.name}')
+
+              # Verify all tools have handlers
+              from screen_agent.mcp.handlers import get_handler
+              missing = [t.name for t in tools if get_handler(t.name) is None]
+              assert not missing, f'Tools without handlers: {missing}'
+
+              # Verify tool schemas are valid JSON Schema
+              for t in tools:
+                  schema = t.inputSchema
+                  assert schema['type'] == 'object', f'{t.name}: bad schema'
+                  assert 'properties' in schema, f'{t.name}: no properties'
+
+              print('All smoke checks passed!')
+
+          asyncio.run(smoke())
+          "
+
+      - name: Verify CLI entry points
+        run: |
+          # Check that the CLI is importable and --help works
+          screen-agent --help
+          screen-agent version
+          screen-agent check
+
+  # ── MCP Protocol Round-Trip Test ─────────────────────────────
+  mcp-protocol:
+    name: MCP Protocol Round-Trip
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev,macos]"
+
+      - name: Test MCP stdio round-trip
+        timeout-minutes: 2
+        run: |
+          python -c "
+          import asyncio
+          import json
+
+          async def test_mcp_protocol():
+              \"\"\"Simulate an MCP client talking to our server over stdio pipes.\"\"\"
+              proc = await asyncio.create_subprocess_exec(
+                  'screen-agent', 'serve', '--transport', 'stdio',
+                  stdin=asyncio.subprocess.PIPE,
+                  stdout=asyncio.subprocess.PIPE,
+                  stderr=asyncio.subprocess.PIPE,
+              )
+
+              async def send(msg: dict) -> dict:
+                  \"\"\"Send a JSON-RPC message and read the response.\"\"\"
+                  payload = json.dumps(msg)
+                  # MCP uses content-length framed messages
+                  header = f'Content-Length: {len(payload)}\r\n\r\n'
+                  proc.stdin.write(header.encode() + payload.encode())
+                  await proc.stdin.drain()
+
+                  # Read response header
+                  header_line = await asyncio.wait_for(proc.stdout.readline(), timeout=10)
+                  content_length = int(header_line.decode().split(':')[1].strip())
+                  await proc.stdout.readline()  # empty line
+                  body = await asyncio.wait_for(proc.stdout.readexactly(content_length), timeout=10)
+                  return json.loads(body)
+
+              # 1. Initialize
+              init_resp = await send({
+                  'jsonrpc': '2.0',
+                  'id': 1,
+                  'method': 'initialize',
+                  'params': {
+                      'protocolVersion': '2024-11-05',
+                      'capabilities': {},
+                      'clientInfo': {'name': 'test-client', 'version': '1.0.0'},
+                  },
+              })
+              print(f'Initialize: {json.dumps(init_resp, indent=2)}')
+              assert 'result' in init_resp, f'Initialize failed: {init_resp}'
+              assert init_resp['result']['serverInfo']['name'] == 'screen-agent'
+              print('  -> Server identified as screen-agent')
+
+              # 2. Send initialized notification
+              notif = json.dumps({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+              header = f'Content-Length: {len(notif)}\r\n\r\n'
+              proc.stdin.write(header.encode() + notif.encode())
+              await proc.stdin.drain()
+
+              # 3. List tools
+              tools_resp = await send({
+                  'jsonrpc': '2.0',
+                  'id': 2,
+                  'method': 'tools/list',
+                  'params': {},
+              })
+              tools = tools_resp['result']['tools']
+              tool_names = [t['name'] for t in tools]
+              print(f'  -> Server exposes {len(tools)} tools')
+
+              expected = [
+                  'capture_screen', 'list_windows', 'get_active_window',
+                  'click', 'type_text', 'press_key', 'scroll', 'move_mouse', 'drag',
+                  'focus_window', 'ocr', 'find_text', 'click_text',
+                  'add_app', 'remove_app', 'set_region', 'clear_scope',
+                  'get_agent_status', 'get_cursor_position',
+              ]
+              for name in expected:
+                  assert name in tool_names, f'Missing tool: {name}'
+              print(f'  -> All {len(expected)} expected tools present')
+
+              # 4. Call get_agent_status (safe, no side effects)
+              status_resp = await send({
+                  'jsonrpc': '2.0',
+                  'id': 3,
+                  'method': 'tools/call',
+                  'params': {
+                      'name': 'get_agent_status',
+                      'arguments': {},
+                  },
+              })
+              print(f'  -> get_agent_status response received')
+              content = status_resp['result']['content']
+              assert len(content) > 0
+              status_data = json.loads(content[0]['text'])
+              assert 'state' in status_data
+              assert 'guardian_enabled' in status_data
+              assert 'input_backends' in status_data
+              print(f'  -> Agent state: {status_data[\"state\"]}')
+              print(f'  -> Backends: {status_data[\"input_backends\"]}')
+
+              # 5. Call add_app (modifies guardian scope)
+              add_resp = await send({
+                  'jsonrpc': '2.0',
+                  'id': 4,
+                  'method': 'tools/call',
+                  'params': {
+                      'name': 'add_app',
+                      'arguments': {'app_name': 'TestApp'},
+                  },
+              })
+              add_data = json.loads(add_resp['result']['content'][0]['text'])
+              assert 'TestApp' in add_data['scope']['allowed_apps']
+              print('  -> add_app: TestApp added to scope')
+
+              # 6. Call clear_scope
+              clear_resp = await send({
+                  'jsonrpc': '2.0',
+                  'id': 5,
+                  'method': 'tools/call',
+                  'params': {
+                      'name': 'clear_scope',
+                      'arguments': {},
+                  },
+              })
+              clear_data = json.loads(clear_resp['result']['content'][0]['text'])
+              assert clear_data['scope']['allowed_apps'] == []
+              print('  -> clear_scope: scope cleared')
+
+              # 7. Call unknown tool
+              unknown_resp = await send({
+                  'jsonrpc': '2.0',
+                  'id': 6,
+                  'method': 'tools/call',
+                  'params': {
+                      'name': 'nonexistent_tool',
+                      'arguments': {},
+                  },
+              })
+              unknown_data = json.loads(unknown_resp['result']['content'][0]['text'])
+              assert 'error' in unknown_data
+              assert unknown_data['error']['code'] == 'UNKNOWN_TOOL'
+              print('  -> Unknown tool returns structured error')
+
+              # 8. Call capture_screen (real screenshot on macOS CI)
+              capture_resp = await send({
+                  'jsonrpc': '2.0',
+                  'id': 7,
+                  'method': 'tools/call',
+                  'params': {
+                      'name': 'capture_screen',
+                      'arguments': {},
+                  },
+              })
+              capture_content = capture_resp['result']['content']
+              has_image = any(c.get('type') == 'image' for c in capture_content)
+              has_text = any(c.get('type') == 'text' for c in capture_content)
+              assert has_image, 'capture_screen should return an image'
+              assert has_text, 'capture_screen should return a text description'
+              print('  -> capture_screen: returned image + text')
+
+              # Cleanup
+              proc.stdin.close()
+              proc.kill()
+              await proc.wait()
+
+              print()
+              print('All MCP protocol round-trip tests passed!')
+
+          asyncio.run(test_mcp_protocol())
+          "
+
+  # ── Lint (runs on Ubuntu for speed) ─────────────────────────
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Install ruff
         run: pip install ruff
-      - name: Lint
+
+      - name: Check lint
         run: ruff check src/ tests/
-      - name: Format check
+
+      - name: Check format
         run: ruff format --check src/ tests/
+
+  # ── Schema Validation ───────────────────────────────────────
+  schema-check:
+    name: Tool Schema Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install minimal deps
+        run: pip install -e ".[dev]" 2>/dev/null || pip install mcp pynput mss pyautogui Pillow typer pytest pytest-asyncio
+
+      - name: Validate tool schemas
+        run: |
+          python -c "
+          import json
+          from screen_agent.mcp.tools import TOOLS
+          from screen_agent.mcp.handlers import get_handler
+
+          errors = []
+          for tool in TOOLS:
+              # Every tool must have a handler
+              if get_handler(tool.name) is None:
+                  errors.append(f'{tool.name}: no handler registered')
+
+              # Schema must be a valid object type
+              schema = tool.inputSchema
+              if schema.get('type') != 'object':
+                  errors.append(f'{tool.name}: schema type is not object')
+              if 'properties' not in schema:
+                  errors.append(f'{tool.name}: no properties in schema')
+
+              # Required fields must exist in properties
+              required = schema.get('required', [])
+              props = schema.get('properties', {})
+              for r in required:
+                  if r not in props:
+                      errors.append(f'{tool.name}: required field \"{r}\" not in properties')
+
+          if errors:
+              for e in errors:
+                  print(f'ERROR: {e}')
+              exit(1)
+
+          print(f'All {len(TOOLS)} tool schemas valid.')
+          print('Tools: ' + ', '.join(t.name for t in TOOLS))
+          "
+
+  # ── Import Smoke Test (cross-platform sanity) ───────────────
+  import-check:
+    name: Import Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install core deps
+        run: pip install mcp Pillow typer pynput mss pyautogui 2>/dev/null || true
+
+      - name: Check core imports
+        run: |
+          python -c "
+          # These should always be importable regardless of platform
+          from screen_agent.types import Point, Region, ActionResult
+          from screen_agent.config import ScreenAgentConfig
+          from screen_agent.errors import ScreenAgentError, GuardianBlockedError
+          from screen_agent.engine.input_chain import InputChain
+          from screen_agent.engine.screen_state import ScreenState
+          from screen_agent.mcp.tools import TOOLS
+          print(f'Core imports OK — {len(TOOLS)} tools defined')
+          "
