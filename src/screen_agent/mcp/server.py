@@ -22,6 +22,7 @@ from screen_agent.mcp.handlers import (
     set_context,
 )
 from screen_agent.mcp.tools import TOOLS
+from screen_agent.testing.mcp_tools import TEST_TOOLS  # noqa: E402 — testing layer tools
 from screen_agent.platform import (
     get_capture_backend,
     get_input_backends,
@@ -77,9 +78,11 @@ def create_server(config: ScreenAgentConfig | None = None) -> Server:
     # Create MCP server
     server = Server("screen-agent")
 
+    all_tools = TOOLS + TEST_TOOLS
+
     @server.list_tools()
     async def list_tools():
-        return TOOLS
+        return all_tools
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict):
@@ -97,8 +100,10 @@ def create_server(config: ScreenAgentConfig | None = None) -> Server:
             return _text({"error": {"code": "INTERNAL_ERROR", "message": str(e)}})
 
     logger.info(
-        "Screen Agent MCP server ready — %d tools, %d input backends: %s",
+        "Screen Agent MCP server ready — %d tools (%d screen + %d test), %d input backends: %s",
+        len(all_tools),
         len(TOOLS),
+        len(TEST_TOOLS),
         len(input_backends),
         [b.name for b in input_backends],
     )
