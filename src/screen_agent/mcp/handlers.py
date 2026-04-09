@@ -447,6 +447,15 @@ async def handle_window_scope(args: dict) -> ContentList:
     if not info:
         return _text({"error": f"Window not found: app={app}, title={title}"})
 
+    # Ensure window is on current Space (CGEvent can't cross Spaces)
+    if hasattr(backend, "ensure_on_current_space"):
+        await backend.ensure_on_current_space(info["window_id"], info["app"])
+        # Refresh bounds after potential Space move
+        new_bounds = await backend.get_window_bounds(info["window_id"])
+        if new_bounds:
+            info["bounds"] = {"X": new_bounds.x, "Y": new_bounds.y,
+                              "Width": new_bounds.width, "Height": new_bounds.height}
+
     bounds = Region(
         x=int(info["bounds"].get("X", 0)),
         y=int(info["bounds"].get("Y", 0)),

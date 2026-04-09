@@ -10,19 +10,22 @@ AI coding assistants are powerful but blind. Screen Agent fixes that with:
 
 - **Multi-Backend Input Chain** — three input methods (Accessibility API → CGEvent → pyautogui) tried in priority order with automatic fallback. Works with native apps, Electron apps, and game engines.
 - **Input Guardian** — real-time safety system that pauses all agent actions when you touch your mouse or keyboard. No other tool provides this.
-- **Apple Vision OCR** — zero-dependency text recognition on macOS (no 2GB PaddleOCR install needed).
+- **Background Testing** — `window_scope` locks operations to a specific window. Test apps behind other windows without screen disruption. Works with any macOS app.
+- **`interact` Compound Tool** — find an element by visible text and click/type in one MCP call. 6x fewer round-trips than capture→find→click→type.
+- **Apple Vision OCR** — zero-dependency text recognition with auto CJK language detection.
 - **Retina-Aware Coordinates** — unified logical coordinate system that handles display scaling correctly.
 
 ## Architecture
 
 ```
 ┌──────────────────────────────────┐
-│          MCP Layer               │  19 tools via Model Context Protocol
+│          MCP Layer               │  22 tools via Model Context Protocol
 ├──────────────────────────────────┤
 │          Engine Layer            │  InputChain (fallback) + Guardian (safety)
+│                                  │  + WindowSession (background testing)
 ├──────────────────────────────────┤
 │        Platform Layer            │  Protocol-based backends
-│  AX → CGEvent → pyautogui       │  macOS / Linux
+│  AX → CGEvent → pyautogui       │  macOS / Windows / Linux
 └──────────────────────────────────┘
 ```
 
@@ -97,12 +100,28 @@ screen-agent check
 | `drag` | Click-drag between two points |
 | `focus_window` | Bring window to front by partial title match |
 
-### OCR (requires macOS with Vision framework)
+### OCR (auto-detects Chinese, Japanese, Korean, English)
 | Tool | Description |
 |------|-------------|
 | `ocr` | Extract all text with bounding boxes |
 | `find_text` | Find text and return location |
 | `click_text` | Find text and click its center |
+
+### Background Testing
+| Tool | Description |
+|------|-------------|
+| `window_scope` | Lock operations to a specific window (can be behind other windows) |
+| `window_release` | Release window scope, return to full-screen mode |
+| `interact` | Find element by text + click/type in one call (6x faster than manual pipeline) |
+
+### Visual E2E Testing
+| Tool | Description |
+|------|-------------|
+| `test_start` | Start a test session with automatic screenshot collection |
+| `test_step` | Begin a test step (auto-captures "before" screenshot) |
+| `test_verify` | Verify step via OCR text check or screenshot diff |
+| `test_end` | End session, generate markdown report with evidence |
+| `test_status` | Current session status |
 
 ### Safety (Input Guardian)
 | Tool | Description |
@@ -112,6 +131,35 @@ screen-agent check
 | `set_region` | Restrict to pixel region |
 | `clear_scope` | Remove all restrictions |
 | `get_agent_status` | Guardian state, backend stats, scope info |
+
+## Background Testing
+
+Screen Agent can test applications **without occupying your screen**:
+
+```
+# Lock to a specific window (can be behind other windows)
+window_scope(app="Chrome", title="My App")
+
+# All subsequent operations target only that window
+interact(target="Submit", action="click")
+interact(target="Email", action="click_and_type", text="test@example.com")
+
+# Verify results via OCR
+test_verify(method="text", expected="Welcome")
+
+# Release when done
+window_release()
+```
+
+### How it works
+- **Capture**: `CGWindowListCreateImage` captures specific windows even when occluded
+- **Input**: `CGEventPost` delivers clicks to background windows on the same Space
+- **OCR**: Auto-detects CJK languages from query text
+
+### Limitations
+- Target window must be on the **same macOS Space** (not a different desktop)
+- `CGWindowListCreateImage` returns blank for windows on other Spaces (macOS kernel limitation)
+- For cross-Space testing, Chrome DevTools Protocol (CDP) support is planned
 
 ## Input Guardian
 
@@ -138,20 +186,21 @@ All parameters are configurable via environment variables:
 | `SCREEN_AGENT_COOLDOWN` | 1.5 | Guardian cooldown seconds |
 | `SCREEN_AGENT_GUARDIAN_DISABLED` | 0 | Set to "1" to disable |
 | `SCREEN_AGENT_INPUT_BACKENDS` | ax,cgevent,pyautogui | Backend priority order |
-| `SCREEN_AGENT_MAX_DIMENSION` | 2000 | Max screenshot dimension |
+| `SCREEN_AGENT_MAX_DIMENSION` | 2560 | Max screenshot dimension |
 | `SCREEN_AGENT_LOG_LEVEL` | INFO | Logging level |
 
 ## Platform Support
 
-| Feature | macOS | Linux |
-|---------|-------|-------|
-| Screenshot | ✅ mss | ✅ mss |
-| AX Input | ✅ | — |
-| CGEvent Input | ✅ | — |
-| pyautogui Input | ✅ | ✅ |
-| Window Management | ✅ AppleScript | ✅ wmctrl |
-| OCR | ✅ Vision Framework | — |
-| Retina Scaling | ✅ | — |
+| Feature | macOS | Windows | Linux |
+|---------|-------|---------|-------|
+| Screenshot | mss | mss | mss |
+| AX Input | Quartz AX | - | - |
+| CGEvent Input | Quartz | - | - |
+| pyautogui Input | fallback | fallback | fallback |
+| Window Management | AppleScript | - | wmctrl |
+| OCR | Vision Framework | - | - |
+| Retina Scaling | auto-detect | - | - |
+| Window Capture | CGWindowListCreateImage | PrintWindow | xdotool+ImageMagick |
 
 ## Development
 
@@ -162,6 +211,8 @@ pip install -e ".[dev,macos]"
 pytest tests/unit/ -v
 ruff check src/ tests/
 ```
+
+See [DEVPATH.md](DEVPATH.md) for development history and architectural decisions.
 
 ## License
 
