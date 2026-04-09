@@ -1,25 +1,32 @@
 """Window-scoped test session.
 
-Locks all capture/input operations to a specific window ID.
-The window can be behind other windows — the user's screen stays free.
-Uses the platform-appropriate WindowCaptureBackend (macOS/Windows/Linux).
+Two modes:
+1. WindowSession — CGWindowListCreateImage + CGEvent (same Space, any app)
+2. CDPSession — Chrome DevTools Protocol (any Space, Chrome/Electron only)
+
+The handler picks the right mode automatically.
 """
 
 from __future__ import annotations
 
 import base64
 import logging
+from typing import TYPE_CHECKING
 
 from screen_agent.types import Point, Region
 
+if TYPE_CHECKING:
+    from screen_agent.platform.cdp.session import CDPSession
+
 logger = logging.getLogger(__name__)
 
-# Global active window session
+# Global state
 _active: WindowSession | None = None
+_cdp: CDPSession | None = None
 
 
 class WindowSession:
-    """Binds screen agent operations to a specific window."""
+    """Binds operations to a specific window via CGWindowListCreateImage."""
 
     def __init__(self, window_id: int, app: str, title: str, bounds: Region):
         self.window_id = window_id
@@ -32,15 +39,12 @@ class WindowSession:
         return Point(self.bounds.x + point.x, self.bounds.y + point.y)
 
     async def capture(self) -> dict | None:
-        """Capture this window's content via the platform backend."""
         from screen_agent.platform import get_window_capture_backend
 
         backend = get_window_capture_backend()
         if backend is None:
-            logger.error("No window capture backend available on this platform")
             return None
 
-        # Refresh bounds (window may have moved)
         new_bounds = await backend.get_window_bounds(self.window_id)
         if new_bounds:
             self.bounds = new_bounds
@@ -49,26 +53,35 @@ class WindowSession:
         if jpeg_bytes is None:
             return None
 
-        # Decode to get dimensions
         from PIL import Image
         from io import BytesIO
         img = Image.open(BytesIO(jpeg_bytes))
-        w, h = img.size
 
-        data = base64.standard_b64encode(jpeg_bytes).decode("ascii")
         return {
-            "image_base64": data,
+            "image_base64": base64.standard_b64encode(jpeg_bytes).decode("ascii"),
             "mime_type": "image/jpeg",
-            "width": w,
-            "height": h,
+            "width": img.size[0],
+            "height": img.size[1],
             "scale_factor": 1.0,
         }
 
 
+# ── Global accessors ──
+
 def get_active() -> WindowSession | None:
     return _active
-
 
 def set_active(session: WindowSession | None) -> None:
     global _active
     _active = session
+
+def get_cdp_session() -> CDPSession | None:
+    return _cdp
+
+def set_cdp_session(session: CDPSession | None) -> None:
+    global _cdp
+    _cdp = session
+
+def get_current_session():
+    """Return whichever session is active (CDP preferred over WindowSession)."""
+    return _cdp or _active

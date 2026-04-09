@@ -308,15 +308,19 @@ TOOLS: list[Tool] = [
     Tool(
         name="window_scope",
         description=(
-            "Lock all operations to a specific window by app name and/or title. "
-            "The window can be behind other windows — the user's screen stays free. "
-            "All subsequent capture/click/interact operations target only this window."
+            "Lock all operations to a specific window. The user's screen stays free. "
+            "For Chrome/Electron: auto-connects via CDP for full cross-Space support "
+            "(requires Chrome started with --remote-debugging-port=9222). "
+            "For other apps: uses window capture (same Space only)."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "app": {"type": "string", "description": "App name (partial match, e.g. 'Chrome')"},
                 "title": {"type": "string", "description": "Window title (partial match)"},
+                "url": {"type": "string", "description": "Match tab by URL (CDP mode, e.g. 'localhost:3456')"},
+                "cdp_port": {"type": "integer", "default": 9222, "description": "Chrome debugging port"},
+                "use_cdp": {"type": "boolean", "default": False, "description": "Force CDP mode"},
             },
         },
     ),
