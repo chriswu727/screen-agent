@@ -482,11 +482,23 @@ async def handle_window_scope(args: dict) -> ContentList:
         width=int(info["bounds"].get("Width", 0)),
         height=int(info["bounds"].get("Height", 0)),
     )
+    # Get PID for AX targeted input
+    pid = 0
+    try:
+        import Quartz
+        wins = Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionIncludingWindow, info["window_id"])
+        if wins:
+            pid = wins[0].get("kCGWindowOwnerPID", 0)
+    except Exception:
+        pass
+
     session = WindowSession(
         window_id=info["window_id"],
         app=info["app"],
         title=info["title"],
         bounds=bounds,
+        pid=pid,
     )
     set_active(session)
 
@@ -663,6 +675,7 @@ async def handle_act(args: dict) -> ContentList:
     result_details: dict = {"at": {"x": point.x, "y": point.y}}
 
     if cdp:
+        # CDP path: Chrome/Electron, any Space, zero mouse occupation
         if action in ("click", "click_and_type"):
             await cdp.click(point)
             result_details["click"] = {"backend": "cdp"}
@@ -672,11 +685,32 @@ async def handle_act(args: dict) -> ContentList:
             await asyncio.sleep(0.1)
             await cdp.type_text(text)
             result_details["type"] = {"backend": "cdp"}
-    else:
-        screen_point = ws.window_to_screen(point) if ws else point
-        await _guardian_check(screen_point)
+    elif ws and ws.pid:
+        # Window-scoped native app: AX targeted input (no mouse, no screen occupation)
+        screen_point = ws.window_to_screen(point)
+        from screen_agent.platform.macos.input_ax_targeted import AXTargetedInput
+        ax = AXTargetedInput(ws.pid)
+
         if action in ("click", "click_and_type"):
-            r = await ctx().input_chain.click(screen_point)
+            ok = await ax.click(screen_point)
+            result_details["click"] = {"backend": "ax_targeted", "success": ok}
+            if not ok:
+                # Fallback to CGEvent
+                await _guardian_check(screen_point)
+                r = await ctx().input_chain.click(screen_point)
+                result_details["click"] = {"backend": r.backend_used, "ax_fallback": True}
+
+        if action in ("type", "click_and_type"):
+            if not text:
+                return _text({"error": "action requires 'text' parameter"})
+            await asyncio.sleep(0.1)
+            ok = await ax.type_text(screen_point, text)
+            result_details["type"] = {"backend": "ax_targeted", "success": ok}
+    else:
+        # No scope: full-screen mode, CGEvent (occupies mouse)
+        await _guardian_check(point)
+        if action in ("click", "click_and_type"):
+            r = await ctx().input_chain.click(point)
             result_details["click"] = {"backend": r.backend_used}
         if action in ("type", "click_and_type"):
             if not text:

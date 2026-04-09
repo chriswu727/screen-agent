@@ -28,11 +28,12 @@ _cdp: CDPSession | None = None
 class WindowSession:
     """Binds operations to a specific window via CGWindowListCreateImage."""
 
-    def __init__(self, window_id: int, app: str, title: str, bounds: Region):
+    def __init__(self, window_id: int, app: str, title: str, bounds: Region, pid: int = 0):
         self.window_id = window_id
         self.app = app
         self.title = title
         self.bounds = bounds
+        self.pid = pid
 
     def window_to_screen(self, point: Point) -> Point:
         """Convert window-relative coordinates to screen-absolute."""
