@@ -4,6 +4,28 @@ All changes, decisions, and lessons learned. Newest first.
 
 ---
 
+## 2026-04-09: Vision-First Testing + eval_js (PR #9)
+
+### Insight
+Screen Agent was just a macOS API wrapper + OCR text matcher. That's what Playwright does, but worse. The ONLY thing that makes Screen Agent different is: **the LLM can SEE the screenshot and decide where to click.** OCR is replaceable. LLM vision is not.
+
+### Changes
+- `act` tool — vision-first interaction: returns screenshot as IMAGE so LLM uses visual understanding, then executes at LLM-provided coordinates. Always returns a post-action screenshot for visual verification.
+- `eval_js` tool — execute JavaScript via CDP for assertions OCR can't handle (`document.title`, `#count.textContent`, DOM state)
+- Updated `capture_screen` description to guide LLM toward visual clicking over OCR
+- `interact` kept for OCR-based fallback; `act` is the primary tool now
+
+### Performance
+5/5 E2E tests in **0.6s** (vs 3-6s with OCR path). 10x faster.
+
+### Philosophy (Ultimate AI Developer)
+- Karpathy: "What can I NOT create with existing tools?" → LLM vision-based testing
+- Hotz: "Simplify until it's embarrassing" → `act` is simpler than `interact` (no OCR)
+- LeCun: "Everyone is digging the same trench" → stop doing OCR text matching, use vision
+- Carmack: "Profile it, then make it 10x faster" → 0.6s vs 3-6s
+
+---
+
 ## 2026-04-09: CDP Backend — True Cross-Space Testing (PR #7, merged)
 
 ### Problem
