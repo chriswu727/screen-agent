@@ -23,8 +23,9 @@ class TestDefaults:
 
     def test_capture_defaults(self):
         c = CaptureConfig()
-        assert c.max_dimension == 2000
-        assert c.jpeg_quality == 80
+        assert c.max_dimension == 2560
+        assert c.jpeg_quality == 75
+        assert c.default_format == "JPEG"
 
     def test_top_level_defaults(self):
         c = ScreenAgentConfig()
@@ -87,12 +88,12 @@ class TestEnvValidation:
     def test_invalid_max_dimension_not_a_number(self, monkeypatch):
         monkeypatch.setenv("SCREEN_AGENT_MAX_DIMENSION", "foo")
         c = ScreenAgentConfig.from_env()
-        assert c.capture.max_dimension == 2000  # default preserved
+        assert c.capture.max_dimension == 2560  # default preserved
 
     def test_too_small_max_dimension_ignored(self, monkeypatch):
         monkeypatch.setenv("SCREEN_AGENT_MAX_DIMENSION", "50")
         c = ScreenAgentConfig.from_env()
-        assert c.capture.max_dimension == 2000  # default preserved
+        assert c.capture.max_dimension == 2560  # default preserved
 
     def test_unknown_backends_filtered(self, monkeypatch):
         monkeypatch.setenv("SCREEN_AGENT_INPUT_BACKENDS", "ax,fakeback,cgevent")

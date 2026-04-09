@@ -126,11 +126,20 @@ def _parse_region(args: dict, key: str = "region") -> Region | None:
 
 
 def _detect_lang(text: str) -> str:
-    """Auto-detect OCR language from query text."""
-    if re.search(r'[\u4e00-\u9fff]', text):
-        return "zh-Hans"
-    if re.search(r'[\u3040-\u309f\u30a0-\u30ff]', text):
+    """Auto-detect OCR language from query text.
+
+    Uses Unicode block detection. Kanji/Hanzi overlap between Chinese and
+    Japanese is resolved by checking for kana first (Japanese-specific).
+    Returns "zh" (not "zh-Hans") so the Vision backend tries both
+    Simplified and Traditional Chinese.
+    """
+    # Japanese kana (unique to Japanese) — check before CJK ideographs
+    if re.search(r'[\u3040-\u309f\u30a0-\u30ff\u31f0-\u31ff\uff65-\uff9f]', text):
         return "ja"
+    # CJK Ideographs (shared by Chinese/Japanese/Korean, treat as Chinese)
+    if re.search(r'[\u3400-\u9fff\uf900-\ufaff]', text):
+        return "zh"
+    # Korean Hangul
     if re.search(r'[\uac00-\ud7af]', text):
         return "ko"
     return "en"

@@ -49,17 +49,20 @@ class MacOSCaptureBackend:
         logical_w = int(img.size[0] / scale)
         logical_h = int(img.size[1] / scale)
 
-        # Resize only for non-display uses (e.g. internal processing).
-        # For LLM-facing screenshots, resizing causes pixel-coordinate
-        # drift: the LLM reads element positions from the image but those
-        # positions no longer map 1:1 to screen click coordinates.
-        # Instead, rely on JPEG compression to reduce data size.
-        if resize and scale > 1.0 and max(img.size) > self._config.max_dimension:
-            # Only resize physical-pixel images (Retina) back to logical size
-            img.thumbnail(
-                (logical_w, logical_h),
-                Image.LANCZOS,
-            )
+        if resize and max(img.size) > self._config.max_dimension:
+            if scale > 1.0:
+                # Retina: resize physical pixels back to logical size (no coord drift)
+                img.thumbnail((logical_w, logical_h), Image.LANCZOS)
+            else:
+                # Non-Retina large screen (e.g. 4K at 1x): cap to max_dimension.
+                # This introduces coordinate drift — image pixels no longer map
+                # 1:1 to screen coordinates. The LLM must scale positions by
+                # (logical_w / img_w). We report logical dims so the handler
+                # can include the mapping info.
+                img.thumbnail(
+                    (self._config.max_dimension, self._config.max_dimension),
+                    Image.LANCZOS,
+                )
 
         data, mime = self._encode(img)
 
