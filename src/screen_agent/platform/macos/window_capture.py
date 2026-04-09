@@ -21,10 +21,8 @@ def _find_window(app: str | None = None, title: str | None = None) -> dict | Non
     """Find a window by app name and/or title. Returns CGWindow info dict."""
     import Quartz
 
-    # Use kCGWindowListOptionAll to find windows on ALL Spaces,
-    # not just the current one. This is critical for background testing.
     windows = Quartz.CGWindowListCopyWindowInfo(
-        Quartz.kCGWindowListOptionAll | Quartz.kCGWindowListExcludeDesktopElements,
+        Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
         Quartz.kCGNullWindowID,
     )
     if not windows:
