@@ -103,6 +103,49 @@ def _get_window_bounds_sync(window_id: int) -> Region | None:
     )
 
 
+def _is_on_current_space(window_id: int) -> bool:
+    """Check if a window is on the currently active Space."""
+    import Quartz
+    on_screen = Quartz.CGWindowListCopyWindowInfo(
+        Quartz.kCGWindowListOptionOnScreenOnly,
+        Quartz.kCGNullWindowID,
+    )
+    return any(w.get("kCGWindowNumber") == window_id for w in (on_screen or []))
+
+
+def _bring_to_current_space(app_name: str) -> None:
+    """Bring app to current Space by activating then immediately deactivating.
+
+    macOS moves all windows of an app to the current Space when activated.
+    We then re-activate the previous frontmost app so the user's workflow
+    is minimally disrupted (~300ms flicker).
+    """
+    import subprocess, time
+
+    # Get current frontmost app
+    prev = subprocess.run(
+        ["osascript", "-e", 'tell application "System Events" to name of first process whose frontmost is true'],
+        capture_output=True, text=True, timeout=5,
+    )
+    prev_app = prev.stdout.strip()
+
+    # Activate target app (brings windows to current Space)
+    subprocess.run(
+        ["osascript", "-e", f'tell application "{app_name}" to activate'],
+        capture_output=True, timeout=5,
+    )
+    time.sleep(0.3)
+
+    # Reactivate previous app so user stays in their workflow
+    if prev_app and prev_app != app_name:
+        subprocess.run(
+            ["osascript", "-e", f'tell application "{prev_app}" to activate'],
+            capture_output=True, timeout=5,
+        )
+
+    logger.info("Brought %s to current Space (was on different Space)", app_name)
+
+
 class MacOSWindowCaptureBackend:
     """Window-targeted capture for macOS via Quartz."""
 
@@ -114,3 +157,9 @@ class MacOSWindowCaptureBackend:
 
     async def get_window_bounds(self, window_id: int) -> Region | None:
         return await asyncio.to_thread(_get_window_bounds_sync, window_id)
+
+    async def ensure_on_current_space(self, window_id: int, app_name: str) -> None:
+        """Ensure window is on current Space. Brings it here if not."""
+        on_space = await asyncio.to_thread(_is_on_current_space, window_id)
+        if not on_space:
+            await asyncio.to_thread(_bring_to_current_space, app_name)
