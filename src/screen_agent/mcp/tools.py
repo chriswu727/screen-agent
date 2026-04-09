@@ -407,6 +407,57 @@ TOOLS: list[Tool] = [
             "required": ["expression"],
         },
     ),
+    # ── Autonomous Test Runner ────────────────────────────────
+    Tool(
+        name="run_test",
+        description=(
+            "Execute a test plan AUTONOMOUSLY — no LLM round-trips during execution. "
+            "You plan the steps, the server executes them all. 15x faster than per-step interaction.\n\n"
+            "Each step can:\n"
+            "- find + click: locate element by visible text and click it\n"
+            "- find + click_and_type: click element and type text\n"
+            "- verify: check that text is visible after actions\n"
+            "- eval_js: run JavaScript assertion (CDP mode)\n"
+            "- key: press a key (enter, tab, etc.)\n"
+            "- wait: pause between steps\n\n"
+            "Example:\n"
+            "  run_test(name='Login', steps=[\n"
+            "    {find: 'Email', action: 'click_and_type', text: 'user@test.com'},\n"
+            "    {find: 'Password', action: 'click_and_type', text: 'secret'},\n"
+            "    {find: 'Log in', action: 'click'},\n"
+            "    {verify: 'Dashboard'},\n"
+            "  ])"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Test name"},
+                "steps": {
+                    "type": "array",
+                    "description": "Test steps to execute autonomously",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "find": {"type": "string", "description": "Text to find on screen via OCR"},
+                            "action": {
+                                "type": "string",
+                                "enum": ["click", "type", "click_and_type"],
+                                "description": "Action to perform on found element",
+                            },
+                            "text": {"type": "string", "description": "Text to type"},
+                            "verify": {"type": "string", "description": "Text that should be visible (verification)"},
+                            "eval_js": {"type": "string", "description": "JavaScript to evaluate (CDP only)"},
+                            "expected": {"type": "string", "description": "Expected eval_js result"},
+                            "key": {"type": "string", "description": "Key to press (enter, tab, etc.)"},
+                            "wait": {"type": "number", "description": "Seconds to wait before step"},
+                            "verify_wait": {"type": "number", "default": 0.3, "description": "Seconds to wait before verification"},
+                        },
+                    },
+                },
+            },
+            "required": ["name", "steps"],
+        },
+    ),
 ]
 
 # Tools that require guardian clearance before execution
