@@ -613,3 +613,104 @@ async def handle_interact(args: dict) -> ContentList:
     if args.get("verify"):
         content.extend(await _verify_screenshot())
     return content
+
+
+# ── Vision-First Handlers ────────────────────────────────────────
+
+@handler("act")
+async def handle_act(args: dict) -> ContentList:
+    """Vision-first interaction.
+
+    Without coordinates: returns screenshot for the LLM to analyze visually.
+    With coordinates: executes the action at (x, y).
+
+    The LLM SEES the screenshot and decides where to click — no OCR needed.
+    This is the key differentiator from Playwright-style tools.
+    """
+    from screen_agent.engine.window_session import get_cdp_session, get_active
+
+    action = args.get("action", "screenshot")
+
+    # Screenshot-only mode: return image for LLM to analyze
+    if action == "screenshot" or ("x" not in args and "y" not in args):
+        image_data, img_w, img_h = await _capture_for_interact()
+        result = {
+            "image_base64": base64.b64encode(image_data).decode("ascii"),
+            "width": img_w,
+            "height": img_h,
+        }
+        return [
+            ImageContent(
+                type="image",
+                data=result["image_base64"],
+                mimeType="image/jpeg",
+            ),
+            TextContent(
+                type="text",
+                text=json.dumps({
+                    "width": img_w, "height": img_h,
+                    "hint": "Look at this screenshot. Decide where to click based on what you SEE.",
+                }),
+            ),
+        ]
+
+    # Action mode: execute at (x, y)
+    point = _parse_point(args)
+    text = args.get("text", "")
+    cdp = get_cdp_session()
+    ws = get_active()
+
+    result_details: dict = {"at": {"x": point.x, "y": point.y}}
+
+    if cdp:
+        if action in ("click", "click_and_type"):
+            await cdp.click(point)
+            result_details["click"] = {"backend": "cdp"}
+        if action in ("type", "click_and_type"):
+            if not text:
+                return _text({"error": "action requires 'text' parameter"})
+            await asyncio.sleep(0.1)
+            await cdp.type_text(text)
+            result_details["type"] = {"backend": "cdp"}
+    else:
+        screen_point = ws.window_to_screen(point) if ws else point
+        await _guardian_check(screen_point)
+        if action in ("click", "click_and_type"):
+            r = await ctx().input_chain.click(screen_point)
+            result_details["click"] = {"backend": r.backend_used}
+        if action in ("type", "click_and_type"):
+            if not text:
+                return _text({"error": "action requires 'text' parameter"})
+            await asyncio.sleep(0.1)
+            r = await ctx().input_chain.type_text(text)
+            result_details["type"] = {"backend": r.backend_used}
+
+    result_details["action"] = action
+    result_details["success"] = True
+
+    # Always return a screenshot after action so LLM can verify visually
+    content = _text(result_details)
+    image_data, img_w, img_h = await _capture_for_interact()
+    content.append(ImageContent(
+        type="image",
+        data=base64.b64encode(image_data).decode("ascii"),
+        mimeType="image/jpeg",
+    ))
+    return content
+
+
+@handler("eval_js")
+async def handle_eval_js(args: dict) -> ContentList:
+    """Execute JavaScript via CDP. Returns the result."""
+    from screen_agent.engine.window_session import get_cdp_session
+
+    cdp = get_cdp_session()
+    if not cdp:
+        return _text({"error": "eval_js requires CDP mode. Call window_scope with a Chrome app first."})
+
+    expression = args["expression"]
+    try:
+        result = await cdp.evaluate(expression)
+        return _text({"result": result, "expression": expression})
+    except Exception as e:
+        return _text({"error": str(e), "expression": expression})

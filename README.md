@@ -8,12 +8,12 @@ An [MCP](https://modelcontextprotocol.io/) server that lets AI tools (Claude Cod
 
 AI coding assistants are powerful but blind. Screen Agent fixes that with:
 
-- **Multi-Backend Input Chain** — three input methods (Accessibility API → CGEvent → pyautogui) tried in priority order with automatic fallback. Works with native apps, Electron apps, and game engines.
+- **Vision-First Testing** — the LLM SEES the screen and decides where to click. Not OCR text matching, not DOM selectors. Visual understanding. This is what makes Screen Agent fundamentally different from Playwright.
+- **`act` + `eval_js`** — `act` returns a screenshot for the LLM to analyze visually, then executes at LLM-provided coordinates. `eval_js` runs JavaScript via CDP for assertions. 5 tests in 0.6s.
+- **Background Testing** — `window_scope` + CDP lets you test Chrome apps on any macOS Space without touching the user's screen. For native apps, tests behind other windows on the same Space.
+- **Multi-Backend Input Chain** — three input methods (Accessibility API → CGEvent → pyautogui) with automatic fallback. Works with native apps, Electron apps, and game engines.
 - **Input Guardian** — real-time safety system that pauses all agent actions when you touch your mouse or keyboard. No other tool provides this.
-- **Background Testing** — `window_scope` locks operations to a specific window. Test apps behind other windows without screen disruption. Works with any macOS app.
-- **`interact` Compound Tool** — find an element by visible text and click/type in one MCP call. 6x fewer round-trips than capture→find→click→type.
-- **Apple Vision OCR** — zero-dependency text recognition with auto CJK language detection.
-- **Retina-Aware Coordinates** — unified logical coordinate system that handles display scaling correctly.
+- **Cross-App Workflows** — test flows spanning multiple apps (email → browser → Slack). No other tool can do this because they're all single-app.
 
 ## Architecture
 
@@ -107,12 +107,18 @@ screen-agent check
 | `find_text` | Find text and return location |
 | `click_text` | Find text and click its center |
 
+### Vision-First Testing (the differentiator)
+| Tool | Description |
+|------|-------------|
+| `act` | Returns screenshot as image → LLM looks and decides → executes at coordinates. No OCR needed. |
+| `eval_js` | Execute JavaScript in the page via CDP. Read DOM state, assert values, click by selector. |
+| `interact` | OCR-based fallback: find element by text + click/type in one call |
+
 ### Background Testing
 | Tool | Description |
 |------|-------------|
-| `window_scope` | Lock operations to a specific window (can be behind other windows) |
+| `window_scope` | Lock to a window. Chrome: auto-CDP (any Space). Native: CGWindowList (same Space). |
 | `window_release` | Release window scope, return to full-screen mode |
-| `interact` | Find element by text + click/type in one call (6x faster than manual pipeline) |
 
 ### Visual E2E Testing
 | Tool | Description |

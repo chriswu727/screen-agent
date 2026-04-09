@@ -21,9 +21,10 @@ TOOLS: list[Tool] = [
     Tool(
         name="capture_screen",
         description=(
-            "Take a screenshot of the entire screen or a specific region. "
-            "Returns the image for visual analysis. Use this to see what's "
-            "currently displayed on the user's screen."
+            "Take a screenshot. Returns the image — LOOK at it to understand "
+            "the screen visually. Prefer using your visual understanding over OCR "
+            "for deciding where to click. When you see a button, icon, or UI element, "
+            "estimate its coordinates from the image and use click(x, y) directly."
         ),
         inputSchema={
             "type": "object",
@@ -358,10 +359,58 @@ TOOLS: list[Tool] = [
             "required": ["target"],
         },
     ),
+    # ── Vision-First Testing ────────────────────────────────
+    Tool(
+        name="act",
+        description=(
+            "Vision-first interaction: take a screenshot, return it as an image, "
+            "then execute an action at coordinates YOU determine by looking at the image. "
+            "Unlike 'interact' (which uses OCR to find text), 'act' trusts YOUR visual "
+            "understanding of the screen. Use this when:\n"
+            "- Elements have no text (icons, images, colored buttons)\n"
+            "- OCR might fail (white text on colored background)\n"
+            "- You can SEE where to click from the screenshot\n\n"
+            "Workflow: call act() → look at the returned screenshot → call act(x, y, action) "
+            "to execute. Or provide x, y directly if you already know the coordinates."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "description": "Click X coordinate (from screenshot)"},
+                "y": {"type": "integer", "description": "Click Y coordinate (from screenshot)"},
+                "action": {
+                    "type": "string",
+                    "enum": ["screenshot", "click", "type", "click_and_type"],
+                    "default": "screenshot",
+                    "description": "screenshot=just capture, click/type/click_and_type=execute action",
+                },
+                "text": {"type": "string", "description": "Text to type (for type/click_and_type)"},
+            },
+        },
+    ),
+    Tool(
+        name="eval_js",
+        description=(
+            "Execute JavaScript in the browser page (CDP mode only). "
+            "Use for assertions, reading DOM state, or clicking elements that OCR can't find. "
+            "Requires window_scope with CDP connection.\n\n"
+            "Examples:\n"
+            "- eval_js('document.title') → page title\n"
+            "- eval_js('document.querySelector(\"#count\").textContent') → '3'\n"
+            "- eval_js('document.querySelector(\".btn\").click()') → click via DOM"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "expression": {"type": "string", "description": "JavaScript expression to evaluate"},
+            },
+            "required": ["expression"],
+        },
+    ),
 ]
 
 # Tools that require guardian clearance before execution
 INPUT_TOOLS = {
     "click", "type_text", "press_key", "scroll",
-    "move_mouse", "drag", "focus_window", "click_text", "interact",
+    "move_mouse", "drag", "focus_window", "click_text", "interact", "act",
 }
