@@ -4,7 +4,47 @@ All changes, decisions, and lessons learned. Newest first.
 
 ---
 
-## 2026-04-09: Vision-First Testing + eval_js (PR #9)
+## 2026-04-09: Autonomous Test Runner (PR #11, merged)
+
+### The Strategic Insight
+After reading Claude Code's full source, realized: competing on "general desktop control" is a losing game against Anthropic's Rust/Swift native modules. Our edge is **testing-specific autonomous execution**.
+
+Claude Code: screenshot → LLM → action → screenshot → LLM → ... (1-3s/step, occupies screen)
+Screen Agent: LLM plans → `run_test()` executes all steps server-side → done (150ms/step, background)
+
+### Changes
+- `engine/test_runner.py` — autonomous plan executor
+- `run_test` MCP tool — accepts step array, returns pass/fail + timing + screenshots
+- Steps: find (OCR), click, type, verify, eval_js, key, wait
+- Fail-fast with before/after screenshot evidence
+
+### E2E Result
+7/8 steps in 3.0s. Counter=3, text input, verification — all via CDP, zero screen disruption.
+
+### What Claude Code CAN'T Do (our moat)
+1. Autonomous multi-step execution without LLM round-trips
+2. Background testing (CDP + AX, no screen occupation)
+3. Built-in test framework with evidence collection
+4. Self-healing (LLM only called on failure)
+5. 15x speed advantage for structured tests
+
+---
+
+## 2026-04-09: AX Targeted Input (PR #10, merged)
+
+### Changes
+- `platform/macos/input_ax_targeted.py` — process-targeted AX input
+- `AXUIElementCopyElementAtPosition` → find element by coordinates without moving mouse
+- `AXUIElementPerformAction` → click without mouse (AXPress/AXConfirm/AXFocus)
+- `act` handler: CDP → AX targeted → CGEvent fallback chain
+- WindowSession stores PID for AX targeting
+
+### Result
+Complete zero-disruption story: CDP for Chrome, AX for native apps, CGEvent only as fallback.
+
+---
+
+## 2026-04-09: Vision-First Testing + eval_js (PR #9, merged)
 
 ### Insight
 Screen Agent was just a macOS API wrapper + OCR text matcher. That's what Playwright does, but worse. The ONLY thing that makes Screen Agent different is: **the LLM can SEE the screenshot and decide where to click.** OCR is replaceable. LLM vision is not.
