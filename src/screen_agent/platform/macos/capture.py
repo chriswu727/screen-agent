@@ -34,7 +34,9 @@ class MacOSCaptureBackend:
         """Capture the screen or a region.
 
         Coordinates in `region` are logical. The result dimensions
-        are also logical (physical pixels / scale_factor).
+        are also logical. Image resize is intentionally skipped for
+        LLM-facing captures to keep pixel positions aligned with
+        screen coordinates. Use JPEG format for bandwidth reduction.
         """
         try:
             img = await asyncio.to_thread(self._grab_sync, region)
@@ -47,14 +49,17 @@ class MacOSCaptureBackend:
         logical_w = int(img.size[0] / scale)
         logical_h = int(img.size[1] / scale)
 
-        if resize and max(img.size) > self._config.max_dimension:
+        # Resize only for non-display uses (e.g. internal processing).
+        # For LLM-facing screenshots, resizing causes pixel-coordinate
+        # drift: the LLM reads element positions from the image but those
+        # positions no longer map 1:1 to screen click coordinates.
+        # Instead, rely on JPEG compression to reduce data size.
+        if resize and scale > 1.0 and max(img.size) > self._config.max_dimension:
+            # Only resize physical-pixel images (Retina) back to logical size
             img.thumbnail(
-                (self._config.max_dimension, self._config.max_dimension),
+                (logical_w, logical_h),
                 Image.LANCZOS,
             )
-            # Update logical dims to match resized image
-            logical_w = int(img.size[0] / scale)
-            logical_h = int(img.size[1] / scale)
 
         data, mime = self._encode(img)
 
@@ -92,10 +97,10 @@ class MacOSCaptureBackend:
         buf = BytesIO()
         fmt = self._config.default_format.upper()
         if fmt == "JPEG":
-            img.save(buf, format="JPEG", quality=self._config.jpeg_quality, optimize=True)
+            img.save(buf, format="JPEG", quality=self._config.jpeg_quality)
             mime = "image/jpeg"
         else:
-            img.save(buf, format="PNG", optimize=True)
+            img.save(buf, format="PNG")
             mime = "image/png"
         data = base64.standard_b64encode(buf.getvalue()).decode("ascii")
         return data, mime
