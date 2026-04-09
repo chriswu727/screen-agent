@@ -10,6 +10,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
@@ -124,6 +125,26 @@ def _parse_region(args: dict, key: str = "region") -> Region | None:
         ) from e
 
 
+def _detect_lang(text: str) -> str:
+    """Auto-detect OCR language from query text.
+
+    Uses Unicode block detection. Kanji/Hanzi overlap between Chinese and
+    Japanese is resolved by checking for kana first (Japanese-specific).
+    Returns "zh" (not "zh-Hans") so the Vision backend tries both
+    Simplified and Traditional Chinese.
+    """
+    # Japanese kana (unique to Japanese) — check before CJK ideographs
+    if re.search(r'[\u3040-\u309f\u30a0-\u30ff\u31f0-\u31ff\uff65-\uff9f]', text):
+        return "ja"
+    # CJK Ideographs (shared by Chinese/Japanese/Korean, treat as Chinese)
+    if re.search(r'[\u3400-\u9fff\uf900-\ufaff]', text):
+        return "zh"
+    # Korean Hangul
+    if re.search(r'[\uac00-\ud7af]', text):
+        return "ko"
+    return "en"
+
+
 async def _guardian_check(point: Point | None = None) -> None:
     """Check guardian clearance. Raises GuardianBlockedError if blocked."""
     result = await ctx().guardian.wait_for_clearance(point=point)
@@ -133,8 +154,7 @@ async def _guardian_check(point: Point | None = None) -> None:
 
 async def _verify_screenshot() -> list[ImageContent]:
     """Capture a verification screenshot after an action."""
-    delay = ctx().capture._config.post_action_delay if hasattr(ctx().capture, '_config') else 0.3
-    await asyncio.sleep(delay)
+    await asyncio.sleep(0.3)
     result = await ctx().capture.capture()
     return [
         ImageContent(
@@ -313,7 +333,8 @@ async def handle_find_text(args: dict) -> ContentList:
     result = await ctx().capture.capture(resize=False)
     image_data = base64.b64decode(result["image_base64"])
 
-    blocks = await ctx().ocr.recognize(image_data)
+    lang = args.get("lang") or _detect_lang(args["query"])
+    blocks = await ctx().ocr.recognize(image_data, lang=lang)
     query = args["query"].lower()
     matches = [b for b in blocks if query in b.text.lower()]
     if not matches:
@@ -333,7 +354,8 @@ async def handle_click_text(args: dict) -> ContentList:
     result = await ctx().capture.capture(resize=False)
     image_data = base64.b64decode(result["image_base64"])
 
-    blocks = await ctx().ocr.recognize(image_data)
+    lang = args.get("lang") or _detect_lang(args["query"])
+    blocks = await ctx().ocr.recognize(image_data, lang=lang)
     query = args["query"].lower()
     matches = [b for b in blocks if query in b.text.lower()]
     if not matches:

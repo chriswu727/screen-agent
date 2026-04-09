@@ -27,9 +27,9 @@ class GuardianConfig:
 class CaptureConfig:
     """Screenshot capture configuration."""
 
-    max_dimension: int = 2000
-    jpeg_quality: int = 80
-    default_format: str = "PNG"
+    max_dimension: int = 2560  # Must be larger than logical screen width to avoid resize-induced coordinate drift
+    jpeg_quality: int = 75
+    default_format: str = "JPEG"
 
 
 @dataclass

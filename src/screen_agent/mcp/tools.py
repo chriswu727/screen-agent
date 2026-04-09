@@ -211,11 +211,15 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="find_text",
-        description="Find specific text on screen and return its location.",
+        description="Find specific text on screen and return its location. Auto-detects language from query (Chinese, Japanese, Korean, English).",
         inputSchema={
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Text to search for"},
+                "lang": {
+                    "type": "string",
+                    "description": "OCR language override: en, zh-Hans, ja, ko. Auto-detected if omitted.",
+                },
             },
             "required": ["query"],
         },
@@ -224,12 +228,16 @@ TOOLS: list[Tool] = [
         name="click_text",
         description=(
             "Find text on screen using OCR and click its center. "
-            "Combines find_text + click into one action."
+            "Combines find_text + click into one action. Auto-detects language from query."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Text to find and click"},
+                "lang": {
+                    "type": "string",
+                    "description": "OCR language override: en, zh-Hans, ja, ko. Auto-detected if omitted.",
+                },
                 "index": {
                     "type": "integer",
                     "default": 0,
