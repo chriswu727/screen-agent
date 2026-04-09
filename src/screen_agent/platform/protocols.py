@@ -99,6 +99,33 @@ class WindowBackend(Protocol):
 
 
 @runtime_checkable
+class WindowCaptureBackend(Protocol):
+    """Window-targeted capture — grabs a specific window even when occluded.
+
+    This is the key differentiator: test apps in the background without
+    occupying the user's physical screen.
+    """
+
+    async def find_window(
+        self, app: str | None = None, title: str | None = None
+    ) -> dict | None:
+        """Find a window by app name and/or title (partial match).
+
+        Returns dict with keys: window_id, app, title, bounds.
+        Returns None if not found.
+        """
+        ...
+
+    async def capture_window(self, window_id: int) -> bytes | None:
+        """Capture a specific window by ID. Returns JPEG bytes or None."""
+        ...
+
+    async def get_window_bounds(self, window_id: int) -> Region | None:
+        """Get a window's screen-space bounds."""
+        ...
+
+
+@runtime_checkable
 class OCRBackend(Protocol):
     """Text recognition from screen images."""
 

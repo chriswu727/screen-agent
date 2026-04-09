@@ -1,4 +1,4 @@
-"""Window-targeted screen capture via CGWindowListCreateImage.
+"""macOS window-targeted capture via CGWindowListCreateImage.
 
 Captures a specific window by ID — even if occluded, behind other windows,
 or on a different Space. This frees the user's physical screen during testing.
@@ -17,12 +17,11 @@ from screen_agent.types import Region
 logger = logging.getLogger(__name__)
 
 
-def _find_window(app: str | None = None, title: str | None = None) -> dict | None:
+def _find_window_sync(app: str | None = None, title: str | None = None) -> dict | None:
     """Find a window by app name and/or title. Returns CGWindow info dict."""
     import Quartz
 
-    # Use kCGWindowListOptionAll to find windows on ALL Spaces,
-    # not just the current one. This is critical for background testing.
+    # kCGWindowListOptionAll finds windows on ALL Spaces (critical for background testing)
     windows = Quartz.CGWindowListCopyWindowInfo(
         Quartz.kCGWindowListOptionAll | Quartz.kCGWindowListExcludeDesktopElements,
         Quartz.kCGNullWindowID,
@@ -35,7 +34,6 @@ def _find_window(app: str | None = None, title: str | None = None) -> dict | Non
         name = w.get("kCGWindowName", "")
         layer = w.get("kCGWindowLayer", 999)
 
-        # Skip menu bar, dock, etc.
         if layer != 0:
             continue
 
@@ -53,8 +51,8 @@ def _find_window(app: str | None = None, title: str | None = None) -> dict | Non
     return None
 
 
-def _capture_window_sync(window_id: int) -> Image.Image | None:
-    """Capture a specific window by ID using CGWindowListCreateImage."""
+def _capture_window_sync(window_id: int) -> bytes | None:
+    """Capture a specific window by ID. Returns JPEG bytes."""
     import Quartz
 
     cg_image = Quartz.CGWindowListCreateImage(
@@ -73,29 +71,19 @@ def _capture_window_sync(window_id: int) -> Image.Image | None:
     if width == 0 or height == 0:
         return None
 
-    # Convert CGImage to PIL Image via raw bitmap data
-    color_space = Quartz.CGImageGetColorSpace(cg_image)
-    bpc = Quartz.CGImageGetBitsPerComponent(cg_image)
-    bpr = Quartz.CGImageGetBytesPerRow(cg_image)
-
     provider = Quartz.CGImageGetDataProvider(cg_image)
     data = Quartz.CGDataProviderCopyData(provider)
+    bpr = Quartz.CGImageGetBytesPerRow(cg_image)
 
     img = Image.frombytes("RGBA", (width, height), bytes(data), "raw", "BGRA", bpr, 1)
-    return img.convert("RGB")
+    img = img.convert("RGB")
+
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=75)
+    return buf.getvalue()
 
 
-async def find_window(app: str | None = None, title: str | None = None) -> dict | None:
-    """Async wrapper for window lookup."""
-    return await asyncio.to_thread(_find_window, app, title)
-
-
-async def capture_window(window_id: int) -> Image.Image | None:
-    """Async wrapper for window capture."""
-    return await asyncio.to_thread(_capture_window_sync, window_id)
-
-
-def get_window_bounds(window_id: int) -> Region | None:
+def _get_window_bounds_sync(window_id: int) -> Region | None:
     """Get a window's screen-space bounds."""
     import Quartz
 
@@ -113,3 +101,16 @@ def get_window_bounds(window_id: int) -> Region | None:
         width=int(bounds.get("Width", 0)),
         height=int(bounds.get("Height", 0)),
     )
+
+
+class MacOSWindowCaptureBackend:
+    """Window-targeted capture for macOS via Quartz."""
+
+    async def find_window(self, app: str | None = None, title: str | None = None) -> dict | None:
+        return await asyncio.to_thread(_find_window_sync, app, title)
+
+    async def capture_window(self, window_id: int) -> bytes | None:
+        return await asyncio.to_thread(_capture_window_sync, window_id)
+
+    async def get_window_bounds(self, window_id: int) -> Region | None:
+        return await asyncio.to_thread(_get_window_bounds_sync, window_id)
