@@ -304,10 +304,60 @@ TOOLS: list[Tool] = [
         ),
         inputSchema={"type": "object", "properties": {}},
     ),
+    # ── Window Scope ─────────────────────────────────────────
+    Tool(
+        name="window_scope",
+        description=(
+            "Lock all operations to a specific window by app name and/or title. "
+            "The window can be behind other windows — the user's screen stays free. "
+            "All subsequent capture/click/interact operations target only this window."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "app": {"type": "string", "description": "App name (partial match, e.g. 'Chrome')"},
+                "title": {"type": "string", "description": "Window title (partial match)"},
+            },
+        },
+    ),
+    Tool(
+        name="window_release",
+        description="Release window scope. Operations return to full-screen mode.",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    # ── Interact (compound action) ───────────────────────────
+    Tool(
+        name="interact",
+        description=(
+            "Find an element by visible text and interact with it — all in one call. "
+            "Replaces the multi-step capture→find→click→type pipeline. "
+            "Auto-detects CJK languages. Works with window_scope for background testing."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "target": {"type": "string", "description": "Visible text to find (e.g. 'Submit', '蓝色按钮')"},
+                "action": {
+                    "type": "string",
+                    "enum": ["click", "type", "click_and_type"],
+                    "default": "click",
+                    "description": "click=click the element, type=type at cursor, click_and_type=click then type",
+                },
+                "text": {"type": "string", "description": "Text to type (required for type/click_and_type)"},
+                "lang": {"type": "string", "description": "OCR language override. Auto-detected if omitted."},
+                "index": {
+                    "type": "integer", "default": 0,
+                    "description": "Which match to interact with if multiple found",
+                },
+                **_VERIFY,
+            },
+            "required": ["target"],
+        },
+    ),
 ]
 
 # Tools that require guardian clearance before execution
 INPUT_TOOLS = {
     "click", "type_text", "press_key", "scroll",
-    "move_mouse", "drag", "focus_window", "click_text",
+    "move_mouse", "drag", "focus_window", "click_text", "interact",
 }

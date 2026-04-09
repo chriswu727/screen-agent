@@ -411,8 +411,140 @@ async def handle_clear_scope(args: dict) -> ContentList:
 
 @handler("get_agent_status")
 async def handle_get_agent_status(args: dict) -> ContentList:
+    from screen_agent.engine.window_session import get_active
     status = ctx().guardian.get_status()
     status["input_backends"] = ctx().input_chain.backend_names
     status["backend_stats"] = ctx().input_chain.stats_summary()
     status["ocr_available"] = ctx().ocr is not None and ctx().ocr.available()
+    ws = get_active()
+    status["window_scope"] = {
+        "active": ws is not None,
+        "app": ws.app if ws else None,
+        "title": ws.title if ws else None,
+        "window_id": ws.window_id if ws else None,
+    }
     return _text(status)
+
+
+# ── Window Scope Handlers ────────────────────────────────────────
+
+@handler("window_scope")
+async def handle_window_scope(args: dict) -> ContentList:
+    """Lock all operations to a specific window. Frees the user's screen."""
+    from screen_agent.platform.macos.window_capture import find_window
+    from screen_agent.engine.window_session import WindowSession, set_active
+
+    app = args.get("app")
+    title = args.get("title")
+    if not app and not title:
+        return _text({"error": "Provide at least 'app' or 'title' to identify the window"})
+
+    info = await find_window(app=app, title=title)
+    if not info:
+        return _text({"error": f"Window not found: app={app}, title={title}"})
+
+    bounds = Region(
+        x=int(info["bounds"].get("X", 0)),
+        y=int(info["bounds"].get("Y", 0)),
+        width=int(info["bounds"].get("Width", 0)),
+        height=int(info["bounds"].get("Height", 0)),
+    )
+    session = WindowSession(
+        window_id=info["window_id"],
+        app=info["app"],
+        title=info["title"],
+        bounds=bounds,
+    )
+    set_active(session)
+
+    return _text({
+        "status": "scoped",
+        "window_id": info["window_id"],
+        "app": info["app"],
+        "title": info["title"],
+        "bounds": {"x": bounds.x, "y": bounds.y, "width": bounds.width, "height": bounds.height},
+    })
+
+
+@handler("window_release")
+async def handle_window_release(args: dict) -> ContentList:
+    """Release window scope. Operations return to full-screen mode."""
+    from screen_agent.engine.window_session import set_active
+    set_active(None)
+    return _text({"status": "released", "mode": "full_screen"})
+
+
+# ── Interact Handler ─────────────────────────────────────────────
+
+async def _capture_for_interact() -> tuple[bytes, int, int]:
+    """Capture screen (or scoped window) and return raw image bytes + dimensions."""
+    from screen_agent.engine.window_session import get_active
+    ws = get_active()
+    if ws:
+        result = await ws.capture()
+        if result is None:
+            raise CaptureError("Window capture failed — window may have closed")
+    else:
+        result = await ctx().capture.capture(resize=False)
+    image_data = base64.b64decode(result["image_base64"])
+    return image_data, result["width"], result["height"]
+
+
+@handler("interact")
+async def handle_interact(args: dict) -> ContentList:
+    """Find an element by text and interact with it — one MCP call.
+
+    Replaces the typical: capture_screen → find_text → click → type_text → capture_screen
+    pipeline with a single server-side operation.
+    """
+    from screen_agent.engine.window_session import get_active
+
+    if not ctx().ocr or not ctx().ocr.available():
+        return _text({"error": "OCR not available — needed for interact"})
+
+    target = args["target"]
+    action = args.get("action", "click")
+    text = args.get("text", "")
+    lang = args.get("lang") or _detect_lang(target)
+
+    # 1. Capture
+    image_data, img_w, img_h = await _capture_for_interact()
+
+    # 2. OCR find target
+    blocks = await ctx().ocr.recognize(image_data, lang=lang)
+    query = target.lower()
+    matches = [b for b in blocks if query in b.text.lower()]
+    if not matches:
+        raise ElementNotFoundError(target)
+
+    element = matches[args.get("index", 0)]
+    click_point = element.center
+
+    # 3. Translate coordinates if window-scoped
+    ws = get_active()
+    if ws:
+        click_point = ws.window_to_screen(click_point)
+
+    # 4. Execute
+    await _guardian_check(click_point)
+
+    result_details = {"target": element.text, "at": {"x": click_point.x, "y": click_point.y}}
+
+    if action in ("click", "click_and_type"):
+        click_result = await ctx().input_chain.click(click_point)
+        result_details["click"] = {"success": click_result.success, "backend": click_result.backend_used}
+
+    if action in ("type", "click_and_type"):
+        if not text:
+            return _text({"error": "action requires 'text' parameter"})
+        await asyncio.sleep(0.1)  # brief pause for focus
+        type_result = await ctx().input_chain.type_text(text)
+        result_details["type"] = {"success": type_result.success, "backend": type_result.backend_used}
+
+    result_details["action"] = action
+    result_details["success"] = True
+
+    content = _text(result_details)
+    if args.get("verify"):
+        content.extend(await _verify_screenshot())
+    return content
