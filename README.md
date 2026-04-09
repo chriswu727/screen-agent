@@ -134,32 +134,49 @@ screen-agent check
 
 ## Background Testing
 
-Screen Agent can test applications **without occupying your screen**:
+Screen Agent can test applications **without occupying your screen**. Three modes, auto-selected:
+
+### Mode 1: CDP (Chrome/Electron — any Space, fully invisible)
+
+```bash
+# Start Chrome with debugging port
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-test
+```
 
 ```
-# Lock to a specific window (can be behind other windows)
-window_scope(app="Chrome", title="My App")
+# Connect — works even if Chrome is on a different desktop
+window_scope(app="Chrome", url="localhost:3000")
 
-# All subsequent operations target only that window
+# All operations go through Chrome's internal pipeline
 interact(target="Submit", action="click")
 interact(target="Email", action="click_and_type", text="test@example.com")
 
-# Verify results via OCR
-test_verify(method="text", expected="Welcome")
-
-# Release when done
 window_release()
 ```
 
-### How it works
-- **Capture**: `CGWindowListCreateImage` captures specific windows even when occluded
-- **Input**: `CGEventPost` delivers clicks to background windows on the same Space
-- **OCR**: Auto-detects CJK languages from query text
+CDP bypasses the macOS window server entirely. Screenshots come from Chrome's renderer, clicks go through Chrome's input system. **Your screen is never touched.**
 
-### Limitations
-- Target window must be on the **same macOS Space** (not a different desktop)
-- `CGWindowListCreateImage` returns blank for windows on other Spaces (macOS kernel limitation)
-- For cross-Space testing, Chrome DevTools Protocol (CDP) support is planned
+### Mode 2: Window Capture (any macOS app — same Space)
+
+```
+# Works with Figma, Xcode, Terminal, games — any app
+window_scope(app="Figma", title="Design v2")
+interact(target="Export", action="click")
+window_release()
+```
+
+Uses `CGWindowListCreateImage` to capture the window even when behind other apps. Requires same macOS Space.
+
+### Mode 3: Full Screen (original)
+
+Without `window_scope`, operates on the full screen as before.
+
+### Fallback Priority
+```
+window_scope called → try CDP (Chrome) → try CGWindowList (same Space) → error
+no scope → full screen mode
+```
 
 ## Input Guardian
 
