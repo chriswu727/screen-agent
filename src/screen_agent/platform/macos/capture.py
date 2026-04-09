@@ -54,11 +54,7 @@ class MacOSCaptureBackend:
                 # Retina: resize physical pixels back to logical size (no coord drift)
                 img.thumbnail((logical_w, logical_h), Image.LANCZOS)
             else:
-                # Non-Retina large screen (e.g. 4K at 1x): cap to max_dimension.
-                # This introduces coordinate drift — image pixels no longer map
-                # 1:1 to screen coordinates. The LLM must scale positions by
-                # (logical_w / img_w). We report logical dims so the handler
-                # can include the mapping info.
+                # Non-Retina large screen (e.g. 4K at 1x): cap to max_dimension
                 img.thumbnail(
                     (self._config.max_dimension, self._config.max_dimension),
                     Image.LANCZOS,
