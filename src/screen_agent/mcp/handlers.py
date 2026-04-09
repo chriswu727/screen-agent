@@ -748,3 +748,115 @@ async def handle_eval_js(args: dict) -> ContentList:
         return _text({"result": result, "expression": expression})
     except Exception as e:
         return _text({"error": str(e), "expression": expression})
+
+
+# ── Autonomous Test Runner ───────────────────────────────────────
+
+@handler("run_test")
+async def handle_run_test(args: dict) -> ContentList:
+    """Execute a test plan autonomously — no LLM round-trips during execution.
+
+    The LLM plans the steps ONCE. The server runs them all server-side.
+    15x faster than per-step LLM interaction.
+    """
+    from screen_agent.engine.window_session import get_cdp_session, get_active
+    from screen_agent.engine.test_runner import run_test
+    from screen_agent.types import Point
+
+    if not ctx().ocr or not ctx().ocr.available():
+        return _text({"error": "OCR required for run_test"})
+
+    name = args.get("name", "Unnamed test")
+    steps = args.get("steps", [])
+    if not steps:
+        return _text({"error": "No steps provided"})
+
+    cdp = get_cdp_session()
+    ws = get_active()
+
+    # Build platform-appropriate callbacks
+    async def capture():
+        if cdp:
+            r = await cdp.capture()
+            return base64.b64decode(r["image_base64"]), r["width"], r["height"]
+        elif ws:
+            r = await ws.capture()
+            return base64.b64decode(r["image_base64"]), r["width"], r["height"]
+        else:
+            r = await ctx().capture.capture(resize=False)
+            return base64.b64decode(r["image_base64"]), r["width"], r["height"]
+
+    async def ocr(img_data, lang):
+        return await ctx().ocr.recognize(img_data, lang=lang)
+
+    async def click(x, y):
+        if cdp:
+            await cdp.click(Point(x, y))
+            return True
+        elif ws:
+            screen_pt = ws.window_to_screen(Point(x, y))
+            try:
+                from screen_agent.platform.macos.input_ax_targeted import AXTargetedInput
+                ax = AXTargetedInput(ws.pid)
+                return await ax.click(screen_pt)
+            except Exception:
+                r = await ctx().input_chain.click(screen_pt)
+                return r.success
+        else:
+            r = await ctx().input_chain.click(Point(x, y))
+            return r.success
+
+    async def type_text(text):
+        if cdp:
+            await cdp.type_text(text)
+            return True
+        else:
+            r = await ctx().input_chain.type_text(text)
+            return r.success
+
+    async def press_key(key):
+        if cdp:
+            await cdp.press_key(key)
+            return True
+        else:
+            r = await ctx().input_chain.press_key(key)
+            return r.success
+
+    async def eval_js(expression):
+        if cdp:
+            return await cdp.evaluate(expression)
+        return None
+
+    # Run autonomously
+    result = await run_test(
+        name=name,
+        steps=steps,
+        capture_fn=capture,
+        ocr_fn=ocr,
+        click_fn=click,
+        type_fn=type_text,
+        press_key_fn=press_key,
+        eval_js_fn=eval_js if cdp else None,
+    )
+
+    # Build response
+    emoji = "✅" if result.all_passed else "❌"
+    summary = (
+        f"{emoji} {name}: {result.passed}/{len(result.steps)} passed "
+        f"in {result.total_ms:.0f}ms"
+    )
+
+    content: ContentList = [TextContent(type="text", text=summary)]
+    content.append(TextContent(type="text", text=json.dumps(result.to_dict(), ensure_ascii=False)))
+
+    # Attach final screenshot if any step has one
+    for step in reversed(result.steps):
+        if step.after_screenshot_b64:
+            content.append(ImageContent(
+                type="image",
+                data=step.after_screenshot_b64,
+                mimeType="image/jpeg",
+            ))
+            break
+
+    return content
