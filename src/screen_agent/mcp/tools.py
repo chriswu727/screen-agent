@@ -438,7 +438,8 @@ TOOLS: list[Tool] = [
                     "items": {
                         "type": "object",
                         "properties": {
-                            "find": {"type": "string", "description": "Text to find on screen via OCR"},
+                            "find": {"type": "string", "description": "Visible text to find (tries JS text search first, falls back to OCR)"},
+                            "selector": {"type": "string", "description": "CSS selector (fastest, CDP only). e.g. '#email', '.btn-primary'"},
                             "action": {
                                 "type": "string",
                                 "enum": ["click", "type", "click_and_type"],

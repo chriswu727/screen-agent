@@ -1,22 +1,14 @@
 """Autonomous test execution engine.
 
-The LLM plans once. The server executes autonomously. No LLM round-trips
-during execution. 15x faster than Claude Code's per-step LLM loop.
+The LLM plans once. The server executes autonomously. No LLM round-trips.
 
-Usage via MCP:
-    run_test(steps=[
-        {"find": "Email", "action": "click_and_type", "text": "test@example.com"},
-        {"find": "Password", "action": "click_and_type", "text": "secret"},
-        {"find": "Log in", "action": "click"},
-        {"verify": "Dashboard"},
-    ])
+Three strategies to find elements (tried in order):
+  1. eval_js — CSS selector via CDP (instant, 100% reliable for web)
+  2. OCR — find visible text on screen (works for any app)
+  3. fail — return screenshot for LLM self-healing
 
-Each step:
-    1. Capture screenshot (CDP or CGWindowList)
-    2. OCR find the target element
-    3. Execute the action (CDP click/type or AX)
-    4. Record before/after screenshots as evidence
-    5. On failure: return screenshot + error for LLM self-healing
+Screenshot reuse: step N's "after" becomes step N+1's "before".
+This halves the number of capture + OCR calls.
 """
 
 from __future__ import annotations
@@ -24,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -101,113 +94,101 @@ async def run_test(
     press_key_fn,
     eval_js_fn=None,
 ) -> TestResult:
-    """Execute a test plan autonomously.
-
-    Args:
-        name: Test name
-        steps: List of step dicts, each with:
-            - find: text to locate via OCR (optional)
-            - action: "click", "type", "click_and_type" (optional)
-            - text: text to type (for type/click_and_type)
-            - verify: text that should be visible after action (optional)
-            - eval_js: JavaScript to evaluate (optional, CDP only)
-            - wait: seconds to wait before step (optional)
-        capture_fn: async () -> (image_bytes, width, height)
-        ocr_fn: async (image_bytes, lang) -> list[TextBlock]
-        click_fn: async (x, y) -> bool
-        type_fn: async (text) -> bool
-        press_key_fn: async (key) -> bool
-        eval_js_fn: async (expression) -> Any (optional, CDP only)
-    """
+    """Execute a test plan autonomously. No LLM in the loop."""
     result = TestResult(name=name)
     t_start = time.time()
+
+    # Screenshot reuse: previous step's "after" = current step's "before"
+    cached_img: bytes | None = None
 
     for i, step in enumerate(steps):
         t_step = time.time()
         sr = StepResult(index=i + 1, description=_describe_step(step), success=False, duration_ms=0)
 
         try:
-            # Optional wait
             if "wait" in step:
                 await asyncio.sleep(float(step["wait"]))
+                cached_img = None  # invalidate after wait
 
-            # Capture before
-            img_data, w, h = await capture_fn()
+            # Capture (reuse previous step's "after" screenshot)
+            if cached_img is None:
+                img_data, w, h = await capture_fn()
+            else:
+                img_data = cached_img
             sr.before_screenshot_b64 = base64.b64encode(img_data).decode("ascii")
+            cached_img = None  # will be set to after-screenshot
 
-            # Find target via OCR
+            # ── FIND + ACT ──
             if "find" in step:
                 target = step["find"]
-                lang = _detect_lang_simple(target)
-                blocks = await ocr_fn(img_data, lang)
-                query = target.lower()
-                matches = [b for b in blocks if query in b.text.lower()]
-
-                if not matches:
-                    sr.error = f"Element not found: '{target}'"
-                    sr.duration_ms = (time.time() - t_step) * 1000
-                    result.steps.append(sr)
-                    continue
-
-                element = matches[0]
-                sr.element_found = element.text
-                sr.element_at = (element.center.x, element.center.y)
-                x, y = element.center.x, element.center.y
-
-                # Execute action
+                selector = step.get("selector")  # optional CSS selector
                 action = step.get("action", "click")
                 text = step.get("text", "")
 
-                if action in ("click", "click_and_type"):
-                    ok = await click_fn(x, y)
-                    sr.backend = "click"
-                    if not ok:
-                        sr.error = f"Click failed at ({x}, {y})"
+                # Strategy 1: eval_js with CSS selector (instant, web-only)
+                found_via_js = False
+                if eval_js_fn and selector:
+                    found_via_js = await _find_and_act_js(
+                        eval_js_fn, selector, action, text, sr
+                    )
+
+                # Strategy 2: eval_js with text content search
+                if not found_via_js and eval_js_fn:
+                    found_via_js = await _find_and_act_js_by_text(
+                        eval_js_fn, target, action, text, sr
+                    )
+
+                # Strategy 3: OCR (works for any app)
+                if not found_via_js:
+                    found_via_ocr = await _find_and_act_ocr(
+                        target, action, text, img_data, ocr_fn, click_fn, type_fn, sr
+                    )
+                    if not found_via_ocr:
                         sr.duration_ms = (time.time() - t_step) * 1000
                         result.steps.append(sr)
-                        continue
+                        break  # fail-fast
 
-                if action in ("type", "click_and_type"):
-                    await asyncio.sleep(0.1)
-                    ok = await type_fn(text)
-                    sr.backend = "type"
-
-            # eval_js step
+            # ── EVAL_JS (standalone) ──
             if "eval_js" in step and eval_js_fn:
                 js_result = await eval_js_fn(step["eval_js"])
                 expected = step.get("expected")
-                if expected is not None:
-                    if str(js_result) != str(expected):
-                        sr.error = f"eval_js: expected '{expected}', got '{js_result}'"
-                        sr.duration_ms = (time.time() - t_step) * 1000
-                        result.steps.append(sr)
-                        continue
+                if expected is not None and str(js_result) != str(expected):
+                    sr.error = f"eval_js: expected '{expected}', got '{js_result}'"
+                    sr.duration_ms = (time.time() - t_step) * 1000
+                    result.steps.append(sr)
+                    break
 
-            # press_key step
+            # ── KEY PRESS ──
             if "key" in step:
                 await press_key_fn(step["key"])
 
-            # Verify step
+            # ── VERIFY ──
             if "verify" in step:
                 await asyncio.sleep(float(step.get("verify_wait", 0.3)))
-                img_data2, _, _ = await capture_fn()
-                sr.after_screenshot_b64 = base64.b64encode(img_data2).decode("ascii")
+                img_after, _, _ = await capture_fn()
+                sr.after_screenshot_b64 = base64.b64encode(img_after).decode("ascii")
+                cached_img = img_after  # reuse for next step
 
-                verify_text = step["verify"]
-                lang = _detect_lang_simple(verify_text)
-                blocks2 = await ocr_fn(img_data2, lang)
-                all_text = " ".join(b.text for b in blocks2)
+                # Try JS verification first (faster, more reliable)
+                verified = False
+                if eval_js_fn:
+                    verified = await _verify_js(eval_js_fn, step["verify"])
 
-                if verify_text.lower() not in all_text.lower():
-                    sr.error = f"Verification failed: '{verify_text}' not found on screen"
+                # Fallback to OCR verification
+                if not verified:
+                    verified = await _verify_ocr(ocr_fn, img_after, step["verify"])
+
+                if not verified:
+                    sr.error = f"Verification failed: '{step['verify']}' not found"
                     sr.duration_ms = (time.time() - t_step) * 1000
                     result.steps.append(sr)
-                    continue
+                    break
             else:
-                # Capture after for evidence
-                await asyncio.sleep(0.1)
-                img_data2, _, _ = await capture_fn()
-                sr.after_screenshot_b64 = base64.b64encode(img_data2).decode("ascii")
+                # Capture after for evidence + reuse
+                await asyncio.sleep(0.05)
+                img_after, _, _ = await capture_fn()
+                sr.after_screenshot_b64 = base64.b64encode(img_after).decode("ascii")
+                cached_img = img_after
 
             sr.success = True
 
@@ -218,13 +199,175 @@ async def run_test(
         sr.duration_ms = (time.time() - t_step) * 1000
         result.steps.append(sr)
 
-        # Stop on first failure (fail-fast)
         if not sr.success:
             break
 
     result.total_ms = (time.time() - t_start) * 1000
     return result
 
+
+# ── Element Finding Strategies ──────────────────────────────────
+
+async def _find_and_act_js(eval_js_fn, selector: str, action: str, text: str, sr: StepResult) -> bool:
+    """Strategy 1: CSS selector via eval_js. Instant, 100% reliable for web."""
+    try:
+        exists = await eval_js_fn(f'!!document.querySelector("{_escape_js(selector)}")')
+        if not exists:
+            return False
+
+        if action in ("click", "click_and_type"):
+            await eval_js_fn(f'document.querySelector("{_escape_js(selector)}").click()')
+            sr.backend = "eval_js"
+
+        if action in ("type", "click_and_type") and text:
+            await eval_js_fn(f'''(() => {{
+                const el = document.querySelector("{_escape_js(selector)}");
+                el.focus();
+                el.value = "{_escape_js(text)}";
+                el.dispatchEvent(new Event("input", {{bubbles: true}}));
+            }})()''')
+            sr.backend = "eval_js"
+
+        sr.element_found = selector
+        return True
+    except Exception:
+        return False
+
+
+async def _find_and_act_js_by_text(eval_js_fn, target: str, action: str, text: str, sr: StepResult) -> bool:
+    """Strategy 2: Find element by visible text via JS. Faster than OCR."""
+    try:
+        # Find element by text content, placeholder, value, or aria-label
+        js = f'''(() => {{
+            const q = "{_escape_js(target)}".toLowerCase();
+            // Strategy A: text content via XPath
+            const xpath = "//*[contains(text(), '{_escape_js(target)}')]";
+            let el = document.evaluate(xpath, document, null,
+                XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+            // Strategy B: placeholder, value, aria-label
+            if (!el) {{
+                el = Array.from(document.querySelectorAll('input,textarea,select,[placeholder]')).find(e =>
+                    (e.placeholder && e.placeholder.toLowerCase().includes(q)) ||
+                    (e.getAttribute('aria-label') || '').toLowerCase().includes(q) ||
+                    (e.value && e.value.toLowerCase().includes(q))
+                );
+            }}
+            // Strategy C: button/link text
+            if (!el) {{
+                el = Array.from(document.querySelectorAll('button,a,[role="button"]')).find(e =>
+                    e.textContent.toLowerCase().includes(q)
+                );
+            }}
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return {{tag: el.tagName, x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}};
+        }})()'''
+        result = await eval_js_fn(js)
+        if not result or result == "null":
+            return False
+
+        if isinstance(result, dict):
+            sr.element_found = f"{result.get('tag', '?')}:'{target}'"
+            x, y = result.get("x", 0), result.get("y", 0)
+            sr.element_at = (x, y)
+
+            if action in ("click", "click_and_type"):
+                click_js = f'''(() => {{
+                    const q = "{_escape_js(target)}".toLowerCase();
+                    // Find by text, placeholder, value, aria-label
+                    let el = null;
+                    const xpath = "//*[contains(text(), '{_escape_js(target)}')]";
+                    el = document.evaluate(xpath, document, null,
+                        XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                    if (!el) el = Array.from(document.querySelectorAll('input,textarea,select,[placeholder]')).find(e =>
+                        (e.placeholder && e.placeholder.toLowerCase().includes(q)) ||
+                        (e.getAttribute('aria-label') || '').toLowerCase().includes(q));
+                    if (!el) el = Array.from(document.querySelectorAll('button,a,[role="button"]')).find(e =>
+                        e.textContent.toLowerCase().includes(q));
+                    if (!el) return false;
+                    const input = el.querySelector('input,textarea,select') ||
+                                  el.closest('button,a,[role="button"]') || el;
+                    input.click();
+                    if (input.focus) input.focus();
+                    return true;
+                }})()'''
+                await eval_js_fn(click_js)
+                sr.backend = "eval_js_text"
+
+            if action in ("type", "click_and_type") and text:
+                type_js = f'''(() => {{
+                    const active = document.activeElement;
+                    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {{
+                        active.value = "{_escape_js(text)}";
+                        active.dispatchEvent(new Event("input", {{bubbles: true}}));
+                        return true;
+                    }}
+                    return false;
+                }})()'''
+                await eval_js_fn(type_js)
+                sr.backend = "eval_js_text"
+
+            return True
+    except Exception:
+        pass
+    return False
+
+
+async def _find_and_act_ocr(
+    target: str, action: str, text: str,
+    img_data: bytes, ocr_fn, click_fn, type_fn, sr: StepResult,
+) -> bool:
+    """Strategy 3: OCR find + coordinate click. Works for any app."""
+    lang = _detect_lang(target)
+    blocks = await ocr_fn(img_data, lang)
+    query = target.lower()
+    matches = [b for b in blocks if query in b.text.lower()]
+
+    if not matches:
+        sr.error = f"Element not found: '{target}' (tried eval_js + OCR)"
+        return False
+
+    element = matches[0]
+    sr.element_found = element.text
+    sr.element_at = (element.center.x, element.center.y)
+
+    if action in ("click", "click_and_type"):
+        ok = await click_fn(element.center.x, element.center.y)
+        sr.backend = "ocr"
+        if not ok:
+            sr.error = f"Click failed at ({element.center.x}, {element.center.y})"
+            return False
+
+    if action in ("type", "click_and_type") and text:
+        await asyncio.sleep(0.1)
+        await type_fn(text)
+        sr.backend = "ocr"
+
+    return True
+
+
+# ── Verification Strategies ─────────────────────────────────────
+
+async def _verify_js(eval_js_fn, expected_text: str) -> bool:
+    """Verify via JS: check if text exists in page body."""
+    try:
+        result = await eval_js_fn(
+            f'document.body.innerText.toLowerCase().includes("{_escape_js(expected_text.lower())}")'
+        )
+        return result is True
+    except Exception:
+        return False
+
+
+async def _verify_ocr(ocr_fn, img_data: bytes, expected_text: str) -> bool:
+    """Verify via OCR: check if text is visible on screen."""
+    lang = _detect_lang(expected_text)
+    blocks = await ocr_fn(img_data, lang)
+    all_text = " ".join(b.text for b in blocks).lower()
+    return expected_text.lower() in all_text
+
+
+# ── Utilities ───────────────────────────────────────────────────
 
 def _describe_step(step: dict) -> str:
     parts = []
@@ -233,23 +376,21 @@ def _describe_step(step: dict) -> str:
         if action == "click":
             parts.append(f"Click '{step['find']}'")
         elif action == "type":
-            parts.append(f"Type '{step.get('text', '')}' into '{step['find']}'")
+            parts.append(f"Type into '{step['find']}'")
         elif action == "click_and_type":
             parts.append(f"Click '{step['find']}' and type '{step.get('text', '')}'")
     if "verify" in step:
-        parts.append(f"Verify '{step['verify']}' visible")
+        parts.append(f"Verify '{step['verify']}'")
     if "eval_js" in step:
-        parts.append(f"Eval: {step['eval_js'][:50]}")
+        parts.append(f"JS: {step['eval_js'][:40]}")
     if "key" in step:
         parts.append(f"Press {step['key']}")
     if "wait" in step:
         parts.append(f"Wait {step['wait']}s")
-    return " → ".join(parts) if parts else str(step)
+    return " | ".join(parts) if parts else str(step)
 
 
-def _detect_lang_simple(text: str) -> str:
-    """Lightweight language detection for OCR."""
-    import re
+def _detect_lang(text: str) -> str:
     if re.search(r'[\u3040-\u30ff\u31f0-\u31ff\uff65-\uff9f]', text):
         return "ja"
     if re.search(r'[\u3400-\u9fff\uf900-\ufaff]', text):
@@ -257,3 +398,8 @@ def _detect_lang_simple(text: str) -> str:
     if re.search(r'[\uac00-\ud7af]', text):
         return "ko"
     return "en"
+
+
+def _escape_js(s: str) -> str:
+    """Escape string for JavaScript string literal."""
+    return s.replace("\\", "\\\\").replace('"', '\\"').replace("'", "\\'").replace("\n", "\\n")
