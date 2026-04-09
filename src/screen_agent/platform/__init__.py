@@ -1,6 +1,6 @@
-"""Platform backend factory — macOS only.
+"""Platform backend factory.
 
-Returns macOS-specific backend implementations.
+Returns platform-specific backend implementations.
 Backends are lazily imported to avoid pulling in optional dependencies
 until they are actually needed.
 """
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
         InputBackend,
         OCRBackend,
         WindowBackend,
+        WindowCaptureBackend,
     )
 
 logger = logging.getLogger(__name__)
@@ -98,4 +99,37 @@ def get_ocr_backend() -> OCRBackend | None:
             return backend
     except ImportError:
         logger.debug("Apple Vision Framework not available")
+    return None
+
+
+def get_window_capture_backend() -> WindowCaptureBackend | None:
+    """Return the platform-appropriate window capture backend.
+
+    Works on macOS, Windows, and Linux (X11). Returns None if
+    no suitable backend is available.
+    """
+    if _SYSTEM == "Darwin":
+        try:
+            from screen_agent.platform.macos.window_capture import MacOSWindowCaptureBackend
+            return MacOSWindowCaptureBackend()
+        except ImportError:
+            logger.debug("macOS window capture not available (Quartz missing)")
+
+    elif _SYSTEM == "Windows":
+        try:
+            from screen_agent.platform.windows.window_capture import WindowsWindowCaptureBackend
+            return WindowsWindowCaptureBackend()
+        except ImportError:
+            logger.debug("Windows window capture not available")
+
+    elif _SYSTEM == "Linux":
+        try:
+            from screen_agent.platform.linux.window_capture import LinuxWindowCaptureBackend
+            return LinuxWindowCaptureBackend()
+        except ImportError:
+            logger.debug("Linux window capture not available")
+
+    else:
+        logger.warning("Window capture not supported on %s", _SYSTEM)
+
     return None

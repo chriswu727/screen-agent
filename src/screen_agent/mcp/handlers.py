@@ -431,7 +431,7 @@ async def handle_get_agent_status(args: dict) -> ContentList:
 @handler("window_scope")
 async def handle_window_scope(args: dict) -> ContentList:
     """Lock all operations to a specific window. Frees the user's screen."""
-    from screen_agent.platform.macos.window_capture import find_window
+    from screen_agent.platform import get_window_capture_backend
     from screen_agent.engine.window_session import WindowSession, set_active
 
     app = args.get("app")
@@ -439,7 +439,11 @@ async def handle_window_scope(args: dict) -> ContentList:
     if not app and not title:
         return _text({"error": "Provide at least 'app' or 'title' to identify the window"})
 
-    info = await find_window(app=app, title=title)
+    backend = get_window_capture_backend()
+    if backend is None:
+        return _text({"error": "Window capture not available on this platform"})
+
+    info = await backend.find_window(app=app, title=title)
     if not info:
         return _text({"error": f"Window not found: app={app}, title={title}"})
 
