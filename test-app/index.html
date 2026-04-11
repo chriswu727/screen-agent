@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Screen Agent 测试页面</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, sans-serif; background: #f5f5f5; padding: 40px; }
+    h1 { margin-bottom: 24px; color: #333; }
+    .card { background: white; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+    .card h2 { margin-bottom: 12px; color: #555; font-size: 16px; }
+
+    /* Test 1: Button click */
+    #click-btn { padding: 10px 24px; background: #4f46e5; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; }
+    #click-btn:hover { background: #4338ca; }
+    #click-result { margin-top: 12px; color: #16a34a; font-weight: bold; min-height: 24px; }
+
+    /* Test 2: Text input */
+    #text-input { padding: 10px 16px; border: 2px solid #d1d5db; border-radius: 8px; font-size: 16px; width: 300px; }
+    #text-input:focus { outline: none; border-color: #4f46e5; }
+    #echo-text { margin-top: 12px; color: #2563eb; min-height: 24px; }
+
+    /* Test 3: Counter */
+    .counter-controls { display: flex; gap: 12px; align-items: center; }
+    .counter-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid #d1d5db; background: white; font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    .counter-btn:hover { background: #f3f4f6; }
+    #counter-value { font-size: 32px; font-weight: bold; color: #333; min-width: 60px; text-align: center; }
+
+    /* Test 4: Checkbox */
+    .checkbox-group { display: flex; flex-direction: column; gap: 8px; }
+    .checkbox-group label { display: flex; align-items: center; gap: 8px; font-size: 16px; cursor: pointer; }
+    .checkbox-group input[type="checkbox"] { width: 18px; height: 18px; }
+    #checkbox-result { margin-top: 12px; color: #9333ea; min-height: 24px; }
+
+    /* Test 5: Dropdown */
+    #color-select { padding: 10px 16px; border: 2px solid #d1d5db; border-radius: 8px; font-size: 16px; width: 200px; }
+    #color-preview { margin-top: 12px; width: 100px; height: 50px; border-radius: 8px; border: 2px solid #d1d5db; transition: background 0.3s; }
+  </style>
+</head>
+<body>
+  <h1>Screen Agent 测试页面</h1>
+
+  <!-- Test 1: Button Click -->
+  <div class="card">
+    <h2>测试 1：按钮点击</h2>
+    <button id="click-btn">点击我</button>
+    <div id="click-result"></div>
+  </div>
+
+  <!-- Test 2: Text Input -->
+  <div class="card">
+    <h2>测试 2：文字输入</h2>
+    <input id="text-input" type="text" placeholder="在这里输入文字..." />
+    <div id="echo-text"></div>
+  </div>
+
+  <!-- Test 3: Counter -->
+  <div class="card">
+    <h2>测试 3：计数器</h2>
+    <div class="counter-controls">
+      <button class="counter-btn" id="dec-btn">−</button>
+      <span id="counter-value">0</span>
+      <button class="counter-btn" id="inc-btn">+</button>
+    </div>
+  </div>
+
+  <!-- Test 4: Checkboxes -->
+  <div class="card">
+    <h2>测试 4：复选框</h2>
+    <div class="checkbox-group">
+      <label><input type="checkbox" value="苹果" class="fruit-cb"> 苹果</label>
+      <label><input type="checkbox" value="香蕉" class="fruit-cb"> 香蕉</label>
+      <label><input type="checkbox" value="橙子" class="fruit-cb"> 橙子</label>
+    </div>
+    <div id="checkbox-result"></div>
+  </div>
+
+  <!-- Test 5: Dropdown Color -->
+  <div class="card">
+    <h2>测试 5：下拉选择</h2>
+    <select id="color-select">
+      <option value="">请选择颜色</option>
+      <option value="#ef4444">红色</option>
+      <option value="#22c55e">绿色</option>
+      <option value="#3b82f6">蓝色</option>
+      <option value="#eab308">黄色</option>
+    </select>
+    <div id="color-preview"></div>
+  </div>
+
+  <script>
+    // Test 1
+    document.getElementById('click-btn').addEventListener('click', () => {
+      document.getElementById('click-result').textContent = '✅ 按钮已被点击！时间: ' + new Date().toLocaleTimeString();
+    });
+
+    // Test 2
+    document.getElementById('text-input').addEventListener('input', (e) => {
+      document.getElementById('echo-text').textContent = '你输入了: ' + e.target.value;
+    });
+
+    // Test 3
+    let count = 0;
+    document.getElementById('inc-btn').addEventListener('click', () => {
+      count++;
+      document.getElementById('counter-value').textContent = count;
+    });
+    document.getElementById('dec-btn').addEventListener('click', () => {
+      count--;
+      document.getElementById('counter-value').textContent = count;
+    });
+
+    // Test 4
+    document.querySelectorAll('.fruit-cb').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const selected = [...document.querySelectorAll('.fruit-cb:checked')].map(c => c.value);
+        document.getElementById('checkbox-result').textContent = selected.length ? '已选择: ' + selected.join(', ') : '';
+      });
+    });
+
+    // Test 5
+    document.getElementById('color-select').addEventListener('change', (e) => {
+      document.getElementById('color-preview').style.background = e.target.value || 'transparent';
+    });
+  </script>
+</body>
+</html>
