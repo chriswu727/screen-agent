@@ -131,7 +131,6 @@ Don't fight the OS. macOS Spaces are a hard boundary for the window server. Inst
 - Added `platform/windows/window_capture.py` — Win32 `PrintWindow`/`BitBlt` via ctypes
 - Added `platform/linux/window_capture.py` — `xdotool`/`wmctrl` + ImageMagick
 - Added `get_window_capture_backend()` factory with platform auto-detection
-- Removed `INTERVIEW_PREP.md` from git tracking
 
 ### Lesson
 Squash merge + branching from local branch (not origin/main) causes conflicts. Always `git fetch origin main && git checkout -b new-branch origin/main` after a PR merge.

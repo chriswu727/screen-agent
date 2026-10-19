@@ -14,4 +14,4 @@ env/
 .ruff_cache/
 *.so
 .DS_Store
-INTERVIEW_PREP.md
+*_PREP.md
