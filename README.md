@@ -1,33 +1,33 @@
 # Screen Agent
 
-**AI-native test agent that sees your app like a real user — 15x faster than Claude Code, without touching your screen.**
+**MCP tools for AI coding agents to operate apps through CDP and the macOS Accessibility API.**
 
 An [MCP](https://modelcontextprotocol.io/) server for autonomous visual testing. The AI plans test steps in natural language, the server executes them all without LLM round-trips. Works in the background via CDP (Chrome) or Accessibility API (native apps).
 
 ## Quick Demo
 
 ```python
-# The AI plans. The server executes. No LLM round-trips. Background. 3 seconds.
+# Example test plan executed by the server without a model call per step.
 run_test(name="Login Flow", steps=[
     {"find": "Email",    "action": "click_and_type", "text": "user@test.com"},
     {"find": "Password", "action": "click_and_type", "text": "secret123"},
     {"find": "Log in",   "action": "click"},
     {"verify": "Dashboard"},
 ])
-# → ✅ 4/4 passed in 800ms. Screenshot evidence attached.
+# Inspect the returned step results and screenshot evidence.
 ```
 
 ## Why?
 
-Every testing tool makes you choose: **fast but fragile** (Playwright) or **smart but slow** (Claude Code computer use). Screen Agent is both:
+Screen Agent combines planned test execution with visual and accessibility-based interaction:
 
-- **Autonomous Execution** — `run_test()` executes ALL steps server-side. No LLM round-trips. 150ms/step vs Claude Code's 1-3s/step. **15x faster.**
-- **Vision-First** — the LLM SEES the screen and decides where to click. Not DOM selectors. UI changes don't break tests because the LLM re-interprets the screen.
-- **`act` + `eval_js`** — `act` returns a screenshot for the LLM to analyze visually, then executes at LLM-provided coordinates. `eval_js` runs JavaScript via CDP for assertions. 5 tests in 0.6s.
+- **Planned execution** — `run_test()` executes the supplied steps server-side without a model call per step.
+- **Visual interaction** — the host model can inspect screenshots and choose coordinates. Reliability depends on the model and the interface.
+- **`act` + `eval_js`** — `act` returns a screenshot for the LLM to analyze visually, then executes at LLM-provided coordinates. `eval_js` runs JavaScript via CDP for assertions.
 - **Background Testing** — `window_scope` + CDP lets you test Chrome apps on any macOS Space without touching the user's screen. For native apps, tests behind other windows on the same Space.
 - **Multi-Backend Input Chain** — three input methods (Accessibility API → CGEvent → pyautogui) with automatic fallback. Works with native apps, Electron apps, and game engines.
-- **Input Guardian** — real-time safety system that pauses all agent actions when you touch your mouse or keyboard. No other tool provides this.
-- **Cross-App Workflows** — test flows spanning multiple apps (email → browser → Slack). No other tool can do this because they're all single-app.
+- **Input Guardian** — real-time safety system that pauses all agent actions when you touch your mouse or keyboard.
+- **Cross-App Workflows** — test flows spanning multiple apps (email → browser → Slack).
 
 ## Architecture
 
@@ -45,7 +45,7 @@ Every testing tool makes you choose: **fast but fragile** (Playwright) or **smar
 
 ### Input Backend Chain
 
-The core design challenge: `pyautogui` works for ~80% of apps but fails for game engines and many Electron apps. Screen Agent solves this with a **Chain of Responsibility** pattern:
+Input methods work differently across native apps, game engines and Electron apps. Screen Agent solves this with a **Chain of Responsibility** pattern:
 
 | Priority | Backend | Method | Best For |
 |----------|---------|--------|----------|
@@ -124,7 +124,7 @@ screen-agent check
 ### Autonomous Testing (the differentiator)
 | Tool | Description |
 |------|-------------|
-| **`run_test`** | **Execute a full test plan autonomously — no LLM round-trips. 15x faster.** |
+| **`run_test`** | Execute the supplied test plan server-side without a model call per step. |
 | `act` | Vision-first: returns screenshot → LLM looks → executes at coordinates |
 | `eval_js` | Execute JavaScript via CDP. DOM assertions, element clicks, state checks |
 | `interact` | OCR-based: find element by text + click/type in one call |
